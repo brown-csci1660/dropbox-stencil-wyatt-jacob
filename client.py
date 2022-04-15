@@ -23,7 +23,7 @@ import support.util as util
 
 # Imports the `dataserver`, `keyserver`, and `memloc` instances. See the Dropbox
 # Wiki for usage and documentation.
-from support.dataserver import dataserver, memloc
+from support.dataserver import Memloc, dataserver, memloc
 from support.keyserver import keyserver
 
 # DO NOT EDIT ABOVE THIS LINE ##################################################
@@ -44,15 +44,33 @@ class User:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/storage/upload-file.html
         """
         # TODO: Implement!
-        raise util.DropboxError("Not Implemented")
-
+        #key = ...
+        #share_root = ...
+        encrypted_data = crypto.SymmetricEncrypt(key, crypto.SecureRandom(16), data)
+        # Compute MAC/Digital Signature here
+        data_memloc = Memloc.Make()
+        dataserver.Set(data_memloc, encrypted_data)
+        file = {"data_memloc": data_memloc, "filename": filename, "encryption_key": key, "share_tree": share_root}
+        encrypted_file = crypto.AsymmetricEncrypt(self.encryption_public_key, util.ObjectToBytes(file))
+        signature = crypto.SignatureSign(self.signing_key, encrypted_file)
+        file_bytes = util.ObjectToBytes((encrypted_file, signature))
+        # Store the file in a memloc and save location to user's root structure
     def download_file(self, filename: str) -> bytes:
         """
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/storage/download-file.html
         """
         # TODO: Implement!
-        raise util.DropboxError("Not Implemented")
+        file_bytes = dataserver.Get(self.file_locations[filename])
+        file_with_sig = util.BytesToObject(file_bytes)
+        valid = crypto.SignatureVerify(self.signing_key, file_with_sig[0], file_with_sig[1])
+        if not valid:
+            raise util.DropboxError("Could not validate file signature")
+        file_bytes = crypto.AsymmetricDecrypt(self.encryption_key, file_with_sig[0])
+        file = util.BytesToObject(file_bytes)
+        data = crypto.SymmetricDecrypt(file["key"], dataserver.Get(file["data_memloc"]))
+        # Check data integrity here
+        return data
 
     def append_file(self, filename: str, data: bytes) -> None:
         """
