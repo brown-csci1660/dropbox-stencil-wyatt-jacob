@@ -29,14 +29,15 @@ from support.keyserver import keyserver
 # DO NOT EDIT ABOVE THIS LINE ##################################################
 
 class User:
-    def __init__(self) -> None:
+    def __init__(self, root_key, root) -> None:
         """
         Class constructor for the `User` class.
 
         You are free to add fields to the User class by changing the definition
         of this function.
         """
-        pass
+        self.root_key = root_key
+        self.root = root
 
     def upload_file(self, filename: str, data: bytes) -> None:
         """
@@ -109,13 +110,56 @@ def create_user(username: str, password: str) -> User:
     The specification for this function is at:
     http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/authentication/create-user.html
     """
-    # TODO: Implement!
-    raise util.DropboxError("Not Implemented")
+    return authenticate_user(username, password)
 
 def authenticate_user(username: str, password: str) -> User:
     """
     The specification for this function is at:
     http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/authentication/authenticate-user.html
     """
-    # TODO: Implement!
-    raise util.DropboxError("Not Implemented")
+
+    salt = username.encode("ascii") + b"super secret academy salt"
+    init_key = crypto.PasswordKDF(password, salt, 16)
+
+    init_ptr = crypto.PasswordKDF("homedir", salt, 16)
+    root = None
+    root_key = None
+    try:
+        print(" * Authenticating current user")
+        init = util.BytesToObject(
+            crypto.SymmetricDecrypt(
+                init_key,
+                dataserver.Get(init_ptr)
+            )
+        )
+        root_key = init["root_key"]
+        root = util.BytesToObject(
+            crypto.SymmetricDecrypt(
+                root_key,
+                dataserver.Get(init["root_ptr"])
+            )
+        )
+    except:
+        print(" * Setting up new user")
+        root_ptr = crypto.SecureRandom(16)
+        root_key = crypto.SecureRandom(16)
+
+        init = {"root_ptr": root_ptr, "root_key": root_key}
+        dataserver.Set(init_ptr,
+            crypto.SymmetricEncrypt(
+                init_key,
+                crypto.SecureRandom(16),
+                util.ObjectToBytes(init)
+            )
+        )
+        root = {"nodes": 0, "tree": {}}
+        dataserver.Set(root_ptr,
+            crypto.SymmetricEncrypt(
+                root_key,
+                crypto.SecureRandom(16),
+                util.ObjectToBytes(root)
+            )
+        )
+
+    return User(root_key, root)
+
