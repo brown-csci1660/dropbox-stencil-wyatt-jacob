@@ -590,12 +590,15 @@ class User:
 
 
         metadata["share_tree"][old_recipient] = False
+        share_tree = metadata["share_tree"]
 
         data = self.download_file(filename)
-        self.upload_file(filename, b"file " + filename.encode() + b" has been deleted")
-
-        self.upload_file(filename, data)
-        self.share_file()
+        # self.upload_file(filename, b"file " + filename.encode() + b" has been deleted")
+        #delete_file
+        self.upload_file(filename, data)  # (re)upload with a different key
+        for user in filter(lambda e: share_tree[e], share_tree):
+            # self.share_file()
+            pass
 
 def create_user(username: str, password: str) -> User:
     """
