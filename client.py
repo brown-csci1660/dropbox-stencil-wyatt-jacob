@@ -29,48 +29,219 @@ from support.keyserver import keyserver
 # DO NOT EDIT ABOVE THIS LINE ##################################################
 
 class User:
-    def __init__(self, root_key, root) -> None:
+    def __init__(self, username, root_key, root, pk, sk) -> None:
         """
         Class constructor for the `User` class.
 
         You are free to add fields to the User class by changing the definition
         of this function.
         """
+        self.username = username
         self.root_key = root_key
         self.root = root
+        self.pk = pk
+        self.sk = sk
+        # Are we allowed to add private helper methods?  (such as maybe to refactor duplicate code?)
 
     def upload_file(self, filename: str, data: bytes) -> None:
         """
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/storage/upload-file.html
         """
-        # TODO: Implement!
-        #key = ...
-        #share_root = ...
-        encrypted_data = crypto.SymmetricEncrypt(key, crypto.SecureRandom(16), data)
-        # Compute MAC/Digital Signature here
-        data_memloc = Memloc.Make()
-        dataserver.Set(data_memloc, encrypted_data)
-        file = {"data_memloc": data_memloc, "filename": filename, "encryption_key": key, "share_tree": share_root}
-        encrypted_file = crypto.AsymmetricEncrypt(self.encryption_public_key, util.ObjectToBytes(file))
-        signature = crypto.SignatureSign(self.signing_key, encrypted_file)
-        file_bytes = util.ObjectToBytes((encrypted_file, signature))
+
+        share_tree = None
+        try:
+            encrypted_metadata, metadata_signature = (None, None)
+            try:
+                encrypted_metadata, metadata_signature = util.BytesToObject(
+                    dataserver.Get(
+                        crypto.HashKDF(self.root_key, filename),
+                    )
+                )
+            finally:
+                if not all([encrypted_metadata, metadata_signature]):
+                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
+
+            valid = crypto.SignatureVerify(
+                crypto.SignatureVerifyKey(self.pk.libPubKey),
+                encrypted_metadata,
+                metadata_signature
+            )
+            if not valid:
+                raise util.DropboxError("Metadata integrity violation")
+
+            metadata = None
+            try:
+                """ hybrid decryption start "'"
+                metadata = util.BytesToObject(
+                    crypto.AsymmetricDecrypt(
+                        self.sk,
+                        encrypted_metadata
+                    )
+                )
+                """
+                metadata = util.BytesToObject(
+                    crypto.SymmetricDecrypt(
+                        crypto.AsymmetricDecrypt(
+                            self.sk,
+                            encrypted_metadata[:2048 // 8]
+                        ), encrypted_metadata[2048 // 8:]
+                    )
+                )
+                """ hybrid decryption  end  """
+
+                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
+            finally:
+                if not metadata:
+                    raise util.DropboxError("Failed to decrypt metadata.")
+
+            share_tree = metadata["share_tree"]
+        except util.DropboxError:
+            # It is okay to overwrite any old (potentially corrupted) data now.
+            pass
+
+        metadata = {
+            "filename": filename,  # checked later to prevent moving-copying attacks
+            "ptr": crypto.SecureRandom(16),
+            "key": crypto.SecureRandom(16),
+            "share_tree": share_tree or {}
+        }
+
+        self.root
+
+        # Encrypt and sign file header
+        ptr = metadata["ptr"]
+        ctr_max = int.to_bytes(1, 16, 'little')
+        encrypted_header = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr_max)
+        header_signature = crypto.HMAC(metadata["key"], encrypted_header)
+        dataserver.Set(ptr, encrypted_header)
+        dataserver.Set(ptr[-1:] + ptr[:-1], header_signature)
+
+        # Encrypt and sign file data
+        ptr = int.to_bytes(int.from_bytes(ptr, 'little')+1, 16, 'little')
+        ctr = int.to_bytes(1, 16, 'little')
+        encrypted_data = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr+data)
+        data_signature = crypto.HMAC(metadata["key"], encrypted_data)
+        dataserver.Set(ptr, encrypted_data)
+        dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
+
+        # Encrypt and sign file metadata
+        """ hybrid encryption start "'"
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
+        """
+        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
+        """ hybrid encryption  end  """
+        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+
         # Store the file in a memloc and save location to user's root structure
+        file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
+        dataserver.Set(
+            crypto.HashKDF(self.root_key, filename),
+            file_bytes
+        )
+
     def download_file(self, filename: str) -> bytes:
         """
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/storage/download-file.html
         """
-        # TODO: Implement!
-        file_bytes = dataserver.Get(self.file_locations[filename])
-        file_with_sig = util.BytesToObject(file_bytes)
-        valid = crypto.SignatureVerify(self.signing_key, file_with_sig[0], file_with_sig[1])
+
+        encrypted_metadata, metadata_signature = (None, None)
+        try:
+            encrypted_metadata, metadata_signature = util.BytesToObject(
+                dataserver.Get(
+                    crypto.HashKDF(self.root_key, filename),
+                )
+            )
+        finally:
+            if not all([encrypted_metadata, metadata_signature]):
+                # raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
+                # raise util.DropboxError("The file either doesn't exist or has been corrupted!")
+                # raise util.DropboxError("The file is corrupted or doesn't exist.")
+                # raise util.DropboxError("A file with that name is corrupted or doesn't exist.")
+                # raise util.DropboxError("No valid file exists with that name.")
+                raise util.DropboxError("No such file exists.")
+
+        valid = crypto.SignatureVerify(
+            crypto.SignatureVerifyKey(self.pk.libPubKey),
+            encrypted_metadata,
+            metadata_signature
+        )
         if not valid:
-            raise util.DropboxError("Could not validate file signature")
-        file_bytes = crypto.AsymmetricDecrypt(self.encryption_key, file_with_sig[0])
-        file = util.BytesToObject(file_bytes)
-        data = crypto.SymmetricDecrypt(file["key"], dataserver.Get(file["data_memloc"]))
-        # Check data integrity here
+            raise util.DropboxError("Metadata integrity violation")
+
+        metadata = None
+        try:
+            """ hybrid decryption start "'"
+            metadata = util.BytesToObject(
+                crypto.AsymmetricDecrypt(
+                    self.sk,
+                    encrypted_metadata
+                )
+            )
+            """
+            metadata = util.BytesToObject(
+                crypto.SymmetricDecrypt(
+                    crypto.AsymmetricDecrypt(
+                        self.sk,
+                        encrypted_metadata[:2048//8]
+                    ),  encrypted_metadata[2048//8:]
+                )
+            )
+            """ hybrid decryption  end  """
+
+            assert(metadata["filename"] == filename)  # protect against a moved-metadata attack
+        finally:
+            if not metadata:
+                raise util.DropboxError("Failed to decrypt metadata.")
+
+        def isSet(ptr):
+            try:
+                dataserver.Get(ptr)
+                return True
+            except ValueError:
+                return False
+
+        data_parts = []
+        try:
+            i = int.from_bytes(metadata["ptr"], 'little')
+            ptr = metadata["ptr"]
+            key = metadata["key"]
+            while isSet(ptr):
+                dataserver_Get_ptr_ = dataserver.Get(ptr)
+                valid = (
+                    crypto.HMAC(key, dataserver_Get_ptr_) ==
+                    dataserver.Get(ptr[-1:] + ptr[:-1])  # data_signature
+                )
+                if not valid:
+                    raise util.DropboxError("Failed to verify file integrity.")
+                else:
+                    data_parts.append(crypto.SymmetricDecrypt(
+                        key,
+                        dataserver_Get_ptr_  # cache get to prevent race condition vulnerability
+                    ))
+
+                i = i + 1
+                ptr = int.to_bytes(i, 16, 'little')
+        finally:
+            if len(data_parts) == 0:  # or maybe 1
+                raise util.DropboxError("Failed to decrypt file data.")
+
+        data = b""#data = None
+        try:
+            header, parts = data_parts[0], data_parts[1:]
+            assert(len(header) == 16)
+            parts_count = int.from_bytes(header, 'little')
+            assert(len(parts) == parts_count)
+            # data = b""
+            for ctr, part in enumerate(parts, 1):#enumerate(data_parts)[1:]
+                idx, part_data = int.from_bytes(part[:16], 'little'), part[16:]
+                assert(idx == ctr)  # enforce original intended ordering
+                data = data + part_data
+        except AssertionError:
+            raise util.DropboxError("Failed to verify file integrity.")
+
         return data
 
     def append_file(self, filename: str, data: bytes) -> None:
@@ -78,39 +249,393 @@ class User:
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/storage/append-file.html
         """
-        # TODO: Implement!
-        raise util.DropboxError("Not Implemented")
+
+        try:
+            encrypted_metadata, metadata_signature = (None, None)
+            try:
+                encrypted_metadata, metadata_signature = util.BytesToObject(
+                    dataserver.Get(
+                        crypto.HashKDF(self.root_key, filename),
+                    )
+                )
+            finally:
+                if not all([encrypted_metadata, metadata_signature]):
+                    # raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
+                    # raise util.DropboxError("File doesn't exist or was tampered with!")
+                    raise util.DropboxError("No such file exists.")
+
+            valid = crypto.SignatureVerify(
+                crypto.SignatureVerifyKey(self.pk.libPubKey),
+                encrypted_metadata,
+                metadata_signature
+            )
+            if not valid:
+                raise util.DropboxError("Metadata integrity violation")
+
+            metadata = None
+            try:
+                """ hybrid decryption start "'"
+                metadata = util.BytesToObject(
+                    crypto.AsymmetricDecrypt(
+                        self.sk,
+                        encrypted_metadata
+                    )
+                )
+                """
+                metadata = util.BytesToObject(
+                    crypto.SymmetricDecrypt(
+                        crypto.AsymmetricDecrypt(
+                            self.sk,
+                            encrypted_metadata[:2048//8]
+                        ),  encrypted_metadata[2048//8:]
+                    )
+                )
+                """ hybrid decryption  end  """
+
+                assert(metadata["filename"] == filename)  # protect against a moved-metadata attack
+            finally:
+                if not metadata:
+                    raise util.DropboxError("Failed to decrypt metadata.")
+
+            def isSet(ptr):
+                try:
+                    dataserver.Get(ptr)
+                    return True
+                except ValueError:
+                    return False
+
+            # Retrieve the file header (containing the parts count) and no more.
+            parts_count = None
+            try:
+                ptr = metadata["ptr"]
+                key = metadata["key"]
+
+                dataserver_Get_ptr_ = dataserver.Get(ptr)
+                valid = (
+                    crypto.HMAC(key, dataserver_Get_ptr_) ==
+                    dataserver.Get(ptr[-1:] + ptr[:-1])  # data_signature
+                )
+                if not valid:
+                    raise util.DropboxError("Failed to verify file integrity.")
+                else:
+                    parts_count = int.from_bytes(
+                        crypto.SymmetricDecrypt(  # decrypt header
+                            key,
+                            dataserver_Get_ptr_  # cache get to prevent race condition vulnerability
+                        ), 'little'
+                    )
+            finally:
+                if not parts_count:
+                    raise util.DropboxError("Failed to decrypt file data.")
+        except:
+            raise util.DropboxError("Could not open file for appending or file does not exist.")
+
+        ctr = int.to_bytes(1+parts_count, 16, 'little')
+
+        # Encrypt and sign file header
+        ptr = metadata["ptr"]
+        ctr_max = ctr
+        encrypted_header = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr_max)
+        header_signature = crypto.HMAC(metadata["key"], encrypted_header)
+        dataserver.Set(ptr, encrypted_header)
+        dataserver.Set(ptr[-1:] + ptr[:-1], header_signature)
+
+        # Encrypt and sign file data
+        ptr = int.to_bytes(int.from_bytes(ptr, 'little')+parts_count+1, 16, 'little')
+        ctr = ctr
+        encrypted_data = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr+data)
+        data_signature = crypto.HMAC(metadata["key"], encrypted_data)
+        dataserver.Set(ptr, encrypted_data)
+        dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
 
     def share_file(self, filename: str, recipient: str) -> None:
         """
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/sharing/share-file.html
         """
-        # TODO: Implement!
-        raise util.DropboxError("Not Implemented")
+
+        recipient_pk = None
+        try:
+            recipient_pk = keyserver.Get(recipient)
+        finally:
+            if not recipient_pk:
+                raise util.DropboxError("No such recipient exists!")
+
+        metadata = None
+        try:
+            encrypted_metadata, metadata_signature = (None, None)
+            try:
+                encrypted_metadata, metadata_signature = util.BytesToObject(
+                    dataserver.Get(
+                        crypto.HashKDF(self.root_key, filename),
+                    )
+                )
+            finally:
+                if not all([encrypted_metadata, metadata_signature]):
+                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
+
+            valid = crypto.SignatureVerify(
+                crypto.SignatureVerifyKey(self.pk.libPubKey),
+                encrypted_metadata,
+                metadata_signature
+            )
+            if not valid:
+                raise util.DropboxError("Metadata integrity violation")
+
+            try:
+                """ hybrid decryption start "'"
+                metadata = util.BytesToObject(
+                    crypto.AsymmetricDecrypt(
+                        self.sk,
+                        encrypted_metadata
+                    )
+                )
+                """
+                metadata = util.BytesToObject(
+                    crypto.SymmetricDecrypt(
+                        crypto.AsymmetricDecrypt(
+                            self.sk,
+                            encrypted_metadata[:2048 // 8]
+                        ), encrypted_metadata[2048 // 8:]
+                    )
+                )
+                """ hybrid decryption  end  """
+
+                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
+            finally:
+                if not metadata:
+                    raise util.DropboxError("Failed to decrypt metadata.")
+        except util.DropboxError:
+            raise util.DropboxError("Failed to open file locally.")
+            # raise util.DropboxError("Failed to first open the file locally.")
+
+
+        metadata["share_tree"][recipient] = True
+
+
+        # Encrypt and sign file metadata for owner
+        """ hybrid encryption start "'"
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
+        """
+        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
+        """ hybrid encryption  end  """
+        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+
+        # Store the file in a memloc and save location to user's root structure
+        file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
+        dataserver.Set(
+            crypto.HashKDF(self.root_key, filename),
+            file_bytes
+        )
+
+        # Encrypt and sign file metadata for recipient
+        """ hybrid encryption start "'"
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
+        """
+        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
+        encrypted_metadata = crypto.AsymmetricEncrypt(recipient_pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
+        """ hybrid encryption  end  """
+        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+
+        # Store the file in a memloc and save location to recipient's root structure
+        file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
+        dataserver.Set(
+            crypto.HashKDF(crypto.Hash(self.username.encode()), filename)[:16],
+            file_bytes
+        )
 
     def receive_file(self, filename: str, sender: str) -> None:
         """
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/sharing/receive-file.html
         """
-        # TODO: Implement!
-        raise util.DropboxError("Not Implemented")
+
+        sender_pk = None
+        try:
+            sender_pk = keyserver.Get(sender)
+        finally:
+            if not sender_pk:
+                raise util.DropboxError("No such sender exists!")
+
+        metadata = None
+        try:
+            encrypted_metadata, metadata_signature = (None, None)
+            try:
+                encrypted_metadata, metadata_signature = util.BytesToObject(
+                    dataserver.Get(
+                        crypto.HashKDF(crypto.Hash(sender.encode()), filename)[:16],
+                    )
+                )
+            finally:
+                if not all([encrypted_metadata, metadata_signature]):
+                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
+
+            valid = crypto.SignatureVerify(
+                crypto.SignatureVerifyKey(sender_pk.libPubKey),
+                encrypted_metadata,
+                metadata_signature
+            )
+            if not valid:
+                raise util.DropboxError("Metadata integrity violation")
+
+            try:
+                """ hybrid decryption start "'"
+                metadata = util.BytesToObject(
+                    crypto.AsymmetricDecrypt(
+                        self.sk,
+                        encrypted_metadata
+                    )
+                )
+                """
+                metadata = util.BytesToObject(
+                    crypto.SymmetricDecrypt(
+                        crypto.AsymmetricDecrypt(
+                            self.sk,
+                            encrypted_metadata[:2048//8]
+                        ), encrypted_metadata[2048//8:]
+                    )
+                )
+                """ hybrid decryption  end  """
+
+                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
+            finally:
+                if not metadata:
+                    raise util.DropboxError("Failed to decrypt metadata.")
+        except util.DropboxError:
+            raise util.DropboxError("Failed to open file locally.")
+            # raise util.DropboxError("Failed to first open the file locally.")
+
+
+        # metadata["share_tree"][sendefr] = True
+        metadata["owner"] = sender
+
+
+        # Encrypt and sign file metadata
+        """ hybrid encryption start "'"
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
+        """
+        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
+        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
+        """ hybrid encryption  end  """
+        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+
+        # Store the file in a memloc and save location to user's root structure
+        file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
+        dataserver.Set(
+            crypto.HashKDF(self.root_key, filename),
+            file_bytes
+        )
 
     def revoke_file(self, filename: str, old_recipient: str) -> None:
         """
         The specification for this function is at:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/sharing/revoke-file.html
         """
-        # TODO: Implement!
-        raise util.DropboxError("Not Implemented")
+
+        recipient_pk = None
+        try:
+            recipient_pk = keyserver.Get(old_recipient)
+        finally:
+            if not recipient_pk:
+                raise util.DropboxError("No such old recipient exists!")
+        del recipient_pk
+
+        metadata = None
+        try:
+            encrypted_metadata, metadata_signature = (None, None)
+            try:
+                encrypted_metadata, metadata_signature = util.BytesToObject(
+                    dataserver.Get(
+                        crypto.HashKDF(self.root_key, filename),
+                    )
+                )
+            finally:
+                if not all([encrypted_metadata, metadata_signature]):
+                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
+
+            valid = crypto.SignatureVerify(
+                crypto.SignatureVerifyKey(self.pk.libPubKey),
+                encrypted_metadata,
+                metadata_signature
+            )
+            if not valid:
+                raise util.DropboxError("Metadata integrity violation")
+
+            try:
+                """ hybrid decryption start "'"
+                metadata = util.BytesToObject(
+                    crypto.AsymmetricDecrypt(
+                        self.sk,
+                        encrypted_metadata
+                    )
+                )
+                """
+                metadata = util.BytesToObject(
+                    crypto.SymmetricDecrypt(
+                        crypto.AsymmetricDecrypt(
+                            self.sk,
+                            encrypted_metadata[:2048 // 8]
+                        ), encrypted_metadata[2048 // 8:]
+                    )
+                )
+                """ hybrid decryption  end  """
+
+                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
+            finally:
+                if not metadata:
+                    raise util.DropboxError("Failed to decrypt metadata.")
+        except util.DropboxError:
+            raise util.DropboxError("Failed to retrieve file's share tree.")
+
+
+        metadata["share_tree"][old_recipient] = False
+
+        data = self.download_file(filename)
+        self.upload_file(filename, b"file " + filename.encode() + b" has been deleted")
+
+        self.upload_file(filename, data)
+        self.share_file()
 
 def create_user(username: str, password: str) -> User:
     """
     The specification for this function is at:
     http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/authentication/create-user.html
     """
+
+    pk, sk = crypto.AsymmetricKeyGen()
+
+    try:
+        keyserver.Set("", None)# ,0)
+    except ValueError:
+        pass
+
+    try:
+        keyserver.Set(username, pk)
+    except ValueError:#("IdentifierAlreadyTaken"):
+        raise util.DropboxError("That username is not available!")
+
+    salt = username.encode("ascii") + b"super secret academy salt"
+    root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
+    root_key = crypto.PasswordKDF(password, salt, 16)
+
+    root = {"nodes": 0, "tree": {}, "sk_bytes": bytes(sk)}
+    dataserver.Set(root_ptr,
+       crypto.SymmetricEncrypt(
+           root_key,
+           crypto.SecureRandom(16),
+           util.ObjectToBytes(root)
+       )
+    )  # set root
+    dataserver.Set(root_ptr[-1:]+root_ptr[:-1],
+        crypto.SignatureSign(
+            crypto.SignatureSignKey(sk.libPrivKey),
+            dataserver.Get(root_ptr),
+        )
+    )  # sign root
+
     return authenticate_user(username, password)
+
 
 def authenticate_user(username: str, password: str) -> User:
     """
@@ -118,48 +643,38 @@ def authenticate_user(username: str, password: str) -> User:
     http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/authentication/authenticate-user.html
     """
 
-    salt = username.encode("ascii") + b"super secret academy salt"
-    init_key = crypto.PasswordKDF(password, salt, 16)
-
-    init_ptr = crypto.PasswordKDF("homedir", salt, 16)
-    root = None
-    root_key = None
+    pk = None
+    sk = None
     try:
-        print(" * Authenticating current user")
-        init = util.BytesToObject(
-            crypto.SymmetricDecrypt(
-                init_key,
-                dataserver.Get(init_ptr)
-            )
-        )
-        root_key = init["root_key"]
-        root = util.BytesToObject(
+        pk = keyserver.Get(username)
+    # except ValueError:
+    #     pass#err=#
+    finally:
+        if not pk:
+            # raise util.DropboxError("Invalid username or password!")
+            raise util.DropboxError("Invalid username!")
+
+    salt = username.encode("ascii") + b"super secret academy salt"
+    root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
+    root_key = crypto.PasswordKDF(password, salt, 16)
+    root_opt = None
+    try:
+        root_opt = util.BytesToObject(
             crypto.SymmetricDecrypt(
                 root_key,
-                dataserver.Get(init["root_ptr"])
+                dataserver.Get(root_ptr)
             )
         )
     except:
-        print(" * Setting up new user")
-        root_ptr = crypto.SecureRandom(16)
-        root_key = crypto.SecureRandom(16)
+        # raise util.DropboxError("Invalid username or password!")
+        raise util.DropboxError("Invalid password!")
 
-        init = {"root_ptr": root_ptr, "root_key": root_key}
-        dataserver.Set(init_ptr,
-            crypto.SymmetricEncrypt(
-                init_key,
-                crypto.SecureRandom(16),
-                util.ObjectToBytes(init)
-            )
-        )
-        root = {"nodes": 0, "tree": {}}
-        dataserver.Set(root_ptr,
-            crypto.SymmetricEncrypt(
-                root_key,
-                crypto.SecureRandom(16),
-                util.ObjectToBytes(root)
-            )
-        )
+    sig = dataserver.Get(root_ptr[-1:]+root_ptr[:-1])
+    valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver.Get(root_ptr), sig)
+    if not valid or not root_opt:
+        raise util.DropboxError("Root integrity violation")
 
-    return User(root_key, root)
+    root = root_opt
+    sk = crypto.AsymmetricDecryptKey.from_bytes(root["sk_bytes"])
 
+    return User(username, root_key, root, pk, sk)
