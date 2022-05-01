@@ -157,55 +157,11 @@ class User:
 
         metadata = None
         try:
-            encrypted_metadata, metadata_signature = (None, None)
-            try:
-                encrypted_metadata, metadata_signature = util.BytesToObject(
-                    dataserver.Get(
-                        crypto.HashKDF(self.root_key, filename),
-                    )
-                )
-            finally:
-                if not all([encrypted_metadata, metadata_signature]):
-                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
-
-            valid = crypto.SignatureVerify(
-                crypto.SignatureVerifyKey(self.pk.libPubKey),
-                encrypted_metadata,
-                metadata_signature
-            )
-            if not valid:
-                raise util.DropboxError("Metadata integrity violation")
-
-            try:
-                """ hybrid decryption start "'"
-                metadata = util.BytesToObject(
-                    crypto.AsymmetricDecrypt(
-                        self.sk,
-                        encrypted_metadata
-                    )
-                )
-                """
-                metadata = util.BytesToObject(
-                    crypto.SymmetricDecrypt(
-                        crypto.AsymmetricDecrypt(
-                            self.sk,
-                            encrypted_metadata[:2048 // 8]
-                        ), encrypted_metadata[2048 // 8:]
-                    )
-                )
-                """ hybrid decryption  end  """
-
-                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
-            finally:
-                if not metadata:
-                    raise util.DropboxError("Failed to decrypt metadata.")
+            metadata = self.__download_file(filename, whence="metadata only")
         except util.DropboxError:
-            raise util.DropboxError("Failed to open file locally.")
-            # raise util.DropboxError("Failed to first open the file locally.")
-
+            raise util.DropboxError("Failed to first open the file locally.")
 
         metadata["share_tree"][recipient] = True
-
 
         # Encrypt and sign file metadata for owner
         """ hybrid encryption start "'"
