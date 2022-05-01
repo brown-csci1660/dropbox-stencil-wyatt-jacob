@@ -113,8 +113,6 @@ class User:
             "share_tree": share_tree or {}
         }
 
-        self.root
-
         # Encrypt and sign file header
         ptr = metadata["ptr"]
         ctr_max = int.to_bytes(1, 16, 'little')
@@ -162,11 +160,6 @@ class User:
             )
         finally:
             if not all([encrypted_metadata, metadata_signature]):
-                # raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
-                # raise util.DropboxError("The file either doesn't exist or has been corrupted!")
-                # raise util.DropboxError("The file is corrupted or doesn't exist.")
-                # raise util.DropboxError("A file with that name is corrupted or doesn't exist.")
-                # raise util.DropboxError("No valid file exists with that name.")
                 raise util.DropboxError("No such file exists.")
 
         valid = crypto.SignatureVerify(
@@ -741,7 +734,6 @@ class User:
 
                     # Store the file in a memloc and save location to user's root structure
                     new_key_signed = util.ObjectToBytes([encrypted_new_key, new_key_signature])
-                    # dataserver.Set(old_ptr[-2:]+old_ptr[:-2], new_key_signed)
                     dataserver.Set(old_ptr, new_key_signed)
 
 def create_user(username: str, password: str) -> User:
@@ -766,7 +758,7 @@ def create_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    root = {"nodes": 0, "tree": {}, "sk_bytes": bytes(sk)}
+    root = {"sk_bytes": bytes(sk)}
     dataserver.Set(root_ptr,
        crypto.SymmetricEncrypt(
            root_key,
@@ -794,8 +786,6 @@ def authenticate_user(username: str, password: str) -> User:
     sk = None
     try:
         pk = keyserver.Get(username)
-    # except ValueError:
-    #     pass#err=#
     finally:
         if not pk:
             # raise util.DropboxError("Invalid username or password!")
