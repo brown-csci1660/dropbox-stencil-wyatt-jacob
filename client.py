@@ -116,85 +116,13 @@ class User:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/storage/append-file.html
         """
 
+        metadata, header = None, None
         try:
-            encrypted_metadata, metadata_signature = (None, None)
-            try:
-                encrypted_metadata, metadata_signature = util.BytesToObject(
-                    dataserver.Get(
-                        crypto.HashKDF(self.root_key, filename),
-                    )
-                )
-            finally:
-                if not all([encrypted_metadata, metadata_signature]):
-                    # raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
-                    # raise util.DropboxError("File doesn't exist or was tampered with!")
-                    raise util.DropboxError("No such file exists.")
-
-            valid = crypto.SignatureVerify(
-                crypto.SignatureVerifyKey(self.pk.libPubKey),
-                encrypted_metadata,
-                metadata_signature
-            )
-            if not valid:
-                raise util.DropboxError("Metadata integrity violation")
-
-            metadata = None
-            try:
-                """ hybrid decryption start "'"
-                metadata = util.BytesToObject(
-                    crypto.AsymmetricDecrypt(
-                        self.sk,
-                        encrypted_metadata
-                    )
-                )
-                """
-                metadata = util.BytesToObject(
-                    crypto.SymmetricDecrypt(
-                        crypto.AsymmetricDecrypt(
-                            self.sk,
-                            encrypted_metadata[:2048//8]
-                        ),  encrypted_metadata[2048//8:]
-                    )
-                )
-                """ hybrid decryption  end  """
-
-                assert(metadata["filename"] == filename)  # protect against a moved-metadata attack
-            finally:
-                if not metadata:
-                    raise util.DropboxError("Failed to decrypt metadata.")
-
-            def isSet(ptr):
-                try:
-                    dataserver.Get(ptr)
-                    return True
-                except ValueError:
-                    return False
-
-            # Retrieve the file header (containing the parts count) and no more.
-            parts_count = None
-            try:
-                ptr = metadata["ptr"]
-                key = metadata["key"]
-
-                dataserver_Get_ptr_ = dataserver.Get(ptr)
-                valid = (
-                    crypto.HMAC(key, dataserver_Get_ptr_) ==
-                    dataserver.Get(ptr[-1:] + ptr[:-1])  # data_signature
-                )
-                if not valid:
-                    raise util.DropboxError("Failed to verify file integrity.")
-                else:
-                    parts_count = int.from_bytes(
-                        crypto.SymmetricDecrypt(  # decrypt header
-                            key,
-                            dataserver_Get_ptr_  # cache get to prevent race condition vulnerability
-                        ), 'little'
-                    )
-            finally:
-                if not parts_count:
-                    raise util.DropboxError("Failed to decrypt file data.")
-        except:
+            metadata, header_bytes = self.__download_file(filename, whence="metadata and header only")
+        except util.DropboxError:
             raise util.DropboxError("Could not open file for appending or file does not exist.")
+
+        parts_count = int.from_bytes(header_bytes, 'little')
 
         ctr = int.to_bytes(1+parts_count, 16, 'little')
 
@@ -628,7 +556,7 @@ class User:
             i = int.from_bytes(metadata["ptr"], 'little')
             ptr = metadata["ptr"]
             key = metadata["key"]
-            while self.isSet(ptr):
+            while self.isSet(ptr) and (not whence == "metadata and header only" or ptr == metadata["ptr"]):  # when *"header only" is set, the loop body is only run once, as the header will be data_part[0]
                 dataserver_Get_ptr_ = dataserver.Get(ptr)
                 valid = (
                         crypto.HMAC(key, dataserver_Get_ptr_) ==
@@ -696,7 +624,7 @@ class User:
                         dataserver.Delete(ptr)
 
                         _return = self.download_file(filename)
-                        data_parts = [None]  # escape-the-return hack
+                        data_parts = [None]*2  # escape-the-return hack
                         return _return
                 else:
                     data_parts.append(crypto.SymmetricDecrypt(
@@ -707,10 +635,15 @@ class User:
                 i = i + 1
                 ptr = int.to_bytes(i, 16, 'little')
         finally:
-            if len(data_parts) == 0:  # or maybe 1
-                # raise util.DropboxError("Failed to decrypt file data.")
-                raise util.DropboxError(
-                    "Failed to decrypt file data.\nFile access was revoked (either legitimately or maliciously).")  # TDO: we can edit this to distinguish between those two cases
+            if len(data_parts) == 0:
+                raise util.DropboxError("Failed to decrypt file data.\nFile access was revoked (either legitimately or maliciously).")  # TDO: we can edit this to distinguish between those two cases
+            elif len(data_parts) == 1:
+                if whence == "metadata and header only":
+                    header: bytes
+                    [header] = data_parts  # we have only read the 16-byte header, and none of the actual contents
+                    return metadata, header
+                else:
+                    raise util.DropboxError(whence+str(len(data_parts))+"Only a header was found - no actual data remains.  Boycott the Dataserver!")
 
         data = b""  # data = None
         try:
