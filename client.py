@@ -210,51 +210,9 @@ class User:
 
         metadata = None
         try:
-            encrypted_metadata, metadata_signature = (None, None)
-            try:
-                encrypted_metadata, metadata_signature = util.BytesToObject(
-                    dataserver.Get(
-                        crypto.HashKDF(crypto.Hash(sender.encode()+self.username.encode()), filename)[:16],
-                    )
-                )
-            finally:
-                if not all([encrypted_metadata, metadata_signature]):
-                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
-
-            valid = crypto.SignatureVerify(
-                crypto.SignatureVerifyKey(sender_pk.libPubKey),
-                encrypted_metadata,
-                metadata_signature
-            )
-            if not valid:
-                raise util.DropboxError("Metadata integrity violation")
-
-            try:
-                """ hybrid decryption start "'"
-                metadata = util.BytesToObject(
-                    crypto.AsymmetricDecrypt(
-                        self.sk,
-                        encrypted_metadata
-                    )
-                )
-                """
-                metadata = util.BytesToObject(
-                    crypto.SymmetricDecrypt(
-                        crypto.AsymmetricDecrypt(
-                            self.sk,
-                            encrypted_metadata[:2048//8]
-                        ), encrypted_metadata[2048//8:]
-                    )
-                )
-                """ hybrid decryption  end  """
-
-                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
-            finally:
-                if not metadata:
-                    raise util.DropboxError("Failed to decrypt metadata.")
+            metadata = self.__download_file(filename, whence="metadata only", owner=sender, owner_pk=sender_pk)
         except util.DropboxError:
-            raise util.DropboxError("Failed to open file locally.")
-            # raise util.DropboxError("Failed to first open the file locally.")
+            raise util.DropboxError("Failed to first open the file locally.")
 
 
         # metadata["share_tree"][sendefr] = True
@@ -461,19 +419,24 @@ class User:
         else:
             return data_opt
 
-    def __download_file(self, filename: str, whence="file contents") -> Union[Union[object, bytes, int], Any]:
+    def __download_file(self, filename: str, owner=None, owner_pk=None, whence="file contents") -> Union[Union[object, bytes, int], Any]:
         encrypted_metadata, metadata_signature = (None, None)
         try:
             encrypted_metadata, metadata_signature = util.BytesToObject(
                 dataserver.Get(
-                    crypto.HashKDF(self.root_key, filename),
+                    crypto.HashKDF(crypto.Hash(owner.encode()+self.username.encode()), filename)[:16]
+                    if owner else
+                    crypto.HashKDF(self.root_key, filename)
                 )
             )
         finally:
             if not all([encrypted_metadata, metadata_signature]):
                 raise util.DropboxError("No such file exists.")
+                # raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
 
         valid = crypto.SignatureVerify(
+            crypto.SignatureVerifyKey(owner_pk.libPubKey)
+            if owner_pk else
             crypto.SignatureVerifyKey(self.pk.libPubKey),
             encrypted_metadata,
             metadata_signature
