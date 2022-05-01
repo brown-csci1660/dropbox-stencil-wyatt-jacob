@@ -29,7 +29,7 @@ from support.keyserver import keyserver
 # DO NOT EDIT ABOVE THIS LINE ##################################################
 
 class User:
-    def __init__(self, username, root_key, root, pk, sk) -> None:
+    def __init__(self, username, root_key, pk, sk) -> None:
         """
         Class constructor for the `User` class.
 
@@ -38,7 +38,6 @@ class User:
         """
         self.username = username
         self.root_key = root_key
-        self.root = root
         self.pk = pk
         self.sk = sk
         # Are we allowed to add private helper methods?  (such as maybe to refactor duplicate code?)
@@ -797,9 +796,10 @@ def create_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    root = {"sk_bytes": bytes(sk)}
+    # root = {"sk_bytes": bytes(sk)}
+    root = bytes(sk)
 
-    User.write(root_ptr, util.ObjectToBytes(root), root_key, sk)
+    User.write(root_ptr, root, root_key, sk)
 
     return authenticate_user(username, password)
 
@@ -823,8 +823,7 @@ def authenticate_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    root_bytes = User.read(root_ptr, root_key, pk)
-    root = util.BytesToObject(root_bytes)
-    sk = crypto.AsymmetricDecryptKey.from_bytes(root["sk_bytes"])
+    sk_bytes = User.read(root_ptr, root_key, pk)
+    sk = crypto.AsymmetricDecryptKey.from_bytes(sk_bytes)
 
-    return User(username, root_key, root, pk, sk)
+    return User(username, root_key, pk, sk)
