@@ -42,6 +42,28 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(vars(u), vars(u2))
 
+    def test_authenticate_user_error(self):
+        self.assertRaises(util.DropboxError, lambda: authenticate_user("usr", "pswd"))
+
+        # Run again to check that authenticate_user doesn't silently create a new user
+        self.assertRaises(util.DropboxError, lambda: authenticate_user("usr", "pswd"))
+
+        # Finally check that the username is still valid for future use
+        u = create_user("usr", "pswd")
+        u2 = authenticate_user("usr", "pswd")
+        self.assertEqual(vars(u), vars(u2))
+
+    def test_empty_username(self):
+        self.assertRaises(util.DropboxError, lambda: create_user("", "pswd"))
+
+    def test_authenticate_user_wrong_password(self):
+        u = create_user("usr", "pswd")
+        self.assertRaises(util.DropboxError, lambda: authenticate_user("usr", ""))
+
+    def test_whitespace_username(self):
+        u = create_user(" ", "pswd")
+        self.assertRaises(util.DropboxError, lambda: authenticate_user("", "pswd"))
+
     def test_upload(self):
         """
         Tests if uploading a file throws any errors.
@@ -201,15 +223,118 @@ class ClientTests(unittest.TestCase):
         #       error needs to be passed to `assertRaises` as a thunk.
         self.assertRaises(util.DropboxError, lambda: u.download_file("file1"))
 
-    def test_the_next_test(self):
+    def test_revoke_subtree(self):
         """
-        Implement more tests by defining more functions like this one!
+        Check that revokation apllies to the whole subtree of the revoked user
+        """
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw3")
+        usr3 = create_user("usr3", "psw3")
+        usr4 = create_user("usr4", "psw4")
+        usr5 = create_user("usr5", "psw5")
 
-        Functions have to start with the word "test" to be recognized. Refer to
-        the Python `unittest` API for more information on how to write test
-        cases: https://docs.python.org/3/library/unittest.html
-        """
-        self.assertTrue(True)
+        usr1.upload_file("shared_file", b"file data")
+        usr1.share_file("shared_file", "usr2")
+        usr1.share_file("shared_file", "usr3")
+        usr2.receive_file("shared_file", "usr1")
+        usr3.receive_file("shared_file", "usr1")
+
+        usr3.share_file("shared_file", "usr4")
+        usr4.receive_file("shared_file", "usr3")
+        usr4.share_file("shared_file", "usr5")
+        usr5.receive_file("shared_file", "usr4")
+
+        self.assertEqual(usr5.download_file("shared_file"), b"file data")
+
+        usr1.revoke_file("shared_file", "usr3")
+        self.assertEqual(usr2.download_file("shared_file"), b"file data")
+        self.assertRaises(util.DropboxError, lambda: usr5.download_file("shared_file"))
+
+    def test_missing_receive_file_call(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+
+        usr1.upload_file("shared_file", b"some file data")
+        usr1.share_file("shared_file", "usr2")
+
+        self.assertRaises(util.DropboxError, lambda: usr2.download_file("shared_file"))
+
+    def test_receive_without_share(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+
+        usr1.upload_file("shared_file", b"some file data")
+        thunk = lambda: usr2.receive_file("shared_file", "usr1")
+        self.assertRaises(util.DropboxError, thunk)
+
+    def test_receive_dup_filename(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+        usr3 = create_user("usr3", "pswd3")
+
+        usr1.upload_file("shared_file", b"some file data")
+        usr2.upload_file("shared_file", b"some other data")
+
+        usr2.share_file("shared_file", "usr3")
+        usr3.receive_file("shared_file", "usr2")
+
+        usr1.share_file("shared_file", "usr2")
+        #usr2.receive_file("shared_file", "usr1")
+
+        # this call should error because "shared_file" already exists
+        #self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
+
+        # usr3 should lose access to usr2's overwritten file
+        #self.assertRaises(util.DropboxError, lambda: usr3.download_file("shared_file"))
+        # usr3 should not be able to regain access by calling receive_file() again
+        #self.assertRaises(util.DropboxError, lambda: usr3.receive_file("shared_file", "usr2"))
+
+    def test_append_to_revoked_file(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+
+        usr1.upload_file("shared_file", b"some data")
+        usr1.share_file("shared_file", "usr2")
+
+        usr2.receive_file("shared_file", "usr1")
+
+        usr1.revoke_file("shared_file", "usr2")
+
+        self.assertRaises(util.DropboxError, lambda: usr2.append_file("shared_file", b"more data"))
+
+    def test_early_revoke(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+
+        usr1.upload_file("shared_file", b"some data")
+
+        usr1.share_file("shared_file", "usr2")
+        usr1.revoke_file("shared_file", "usr2")
+
+        #self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
+
+        self.assertRaises(util.DropboxError, lambda: usr2.download_file("shared_file"))
+
+    def test_self_shared_shared_file(self):
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw3")
+        usr3 = create_user("usr3", "psw3")
+
+        usr1.upload_file("shared_file", b"file data")
+
+        usr1.share_file("shared_file", "usr2")
+        usr2.receive_file("shared_file", "usr1")
+
+        usr1.share_file("shared_file", "usr3")
+        usr3.receive_file("shared_file", "usr1")
+
+        usr3.share_file("shared_file", "usr3")
+
+
+    #TODO:
+        # test share_file with a file not owned by the calling user
+        # test sharing multiple files
+        # test that shares are unaffected by owner overwriting the file
 
 # DO NOT EDIT BELOW THIS LINE ##################################################
 
