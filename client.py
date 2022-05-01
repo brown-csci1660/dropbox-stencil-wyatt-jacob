@@ -547,9 +547,6 @@ def authenticate_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    sk_bytes = User.read(root_ptr, root_key, pk)
-    if not sk_bytes[:5] == b"-"*5:
-        raise util.DropboxError("Invalid password!")
-    sk = crypto.AsymmetricDecryptKey.from_bytes(sk_bytes)
+    sk = crypto.AsymmetricDecryptKey.from_bytes(User.read(root_ptr, root_key, pk))
 
     return User(username, root_key, pk, sk)
