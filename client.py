@@ -249,58 +249,16 @@ class User:
                 raise util.DropboxError("No such old recipient exists!")
         del recipient_pk
 
-        metadata = None
+        share_tree = None
+        old_ptr = None
         try:
-            encrypted_metadata, metadata_signature = (None, None)
-            try:
-                encrypted_metadata, metadata_signature = util.BytesToObject(
-                    dataserver.Get(
-                        crypto.HashKDF(self.root_key, filename),
-                    )
-                )
-            finally:
-                if not all([encrypted_metadata, metadata_signature]):
-                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
-
-            valid = crypto.SignatureVerify(
-                crypto.SignatureVerifyKey(self.pk.libPubKey),
-                encrypted_metadata,
-                metadata_signature
-            )
-            if not valid:
-                raise util.DropboxError("Metadata integrity violation")
-
-            try:
-                """ hybrid decryption start "'"
-                metadata = util.BytesToObject(
-                    crypto.AsymmetricDecrypt(
-                        self.sk,
-                        encrypted_metadata
-                    )
-                )
-                """
-                metadata = util.BytesToObject(
-                    crypto.SymmetricDecrypt(
-                        crypto.AsymmetricDecrypt(
-                            self.sk,
-                            encrypted_metadata[:2048 // 8]
-                        ), encrypted_metadata[2048 // 8:]
-                    )
-                )
-                """ hybrid decryption  end  """
-
-                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
-            finally:
-                if not metadata:
-                    raise util.DropboxError("Failed to decrypt metadata.")
+            old_metadata = self.__download_file(filename, whence="metadata only")
+            share_tree = old_metadata["share_tree"]
+            old_ptr = old_metadata["ptr"]
         except util.DropboxError:
-            raise util.DropboxError("Failed to retrieve file's share tree.")
+            raise util.DropboxError("Failed to open and retrieve file's share tree.")
 
-
-        metadata["share_tree"][old_recipient] = False
-        share_tree = metadata["share_tree"]
-
-        old_ptr = metadata["ptr"]
+        share_tree[old_recipient] = False
 
         data = self.download_file(filename)
         # self.upload_file(filename, b"file " + filename.encode() + b" has been deleted")
@@ -311,58 +269,14 @@ class User:
         # print("deleted old file")
         self.upload_file(filename, data)  # (re)upload with a different key
 
-
         metadata = None
         try:
-            encrypted_metadata, metadata_signature = (None, None)
-            try:
-                encrypted_metadata, metadata_signature = util.BytesToObject(
-                    dataserver.Get(
-                        crypto.HashKDF(self.root_key, filename),
-                    )
-                )
-            finally:
-                if not all([encrypted_metadata, metadata_signature]):
-                    raise util.DropboxError("Deserialization failed.  File may have been tampered with!")
-
-            valid = crypto.SignatureVerify(
-                crypto.SignatureVerifyKey(self.pk.libPubKey),
-                encrypted_metadata,
-                metadata_signature
-            )
-            if not valid:
-                raise util.DropboxError("Metadata integrity violation")
-
-            try:
-                """ hybrid decryption start "'"
-                metadata = util.BytesToObject(
-                    crypto.AsymmetricDecrypt(
-                        self.sk,
-                        encrypted_metadata
-                    )
-                )
-                """
-                metadata = util.BytesToObject(
-                    crypto.SymmetricDecrypt(
-                        crypto.AsymmetricDecrypt(
-                            self.sk,
-                            encrypted_metadata[:2048 // 8]
-                        ), encrypted_metadata[2048 // 8:]
-                    )
-                )
-                """ hybrid decryption  end  """
-
-                assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
-            finally:
-                if not metadata:
-                    raise util.DropboxError("Failed to decrypt metadata.")
+            metadata = self.__download_file(filename, whence="metadata only")
         except util.DropboxError:
             raise util.DropboxError("Failed to retrieve file's new metadata.")
 
-
         new_key = metadata["key"]
         new_ptr = metadata["ptr"]
-
 
         for user in filter(lambda e: share_tree[e], share_tree):
             # self.share_file()
