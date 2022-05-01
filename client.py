@@ -474,7 +474,7 @@ class User:
            crypto.SymmetricEncrypt(
                k,
                crypto.SecureRandom(16),
-               data
+               util.ObjectToBytes(data)
            )
         )  # set data
         dataserver.Set(ptr[-1:]+ptr[:-1],
@@ -489,13 +489,14 @@ class User:
         dataserver_Get_ptr_ = dataserver.Get(ptr)
         data_opt = None
         try:
-            data_opt = crypto.SymmetricDecrypt(
-                k,
-                dataserver_Get_ptr_
+            data_opt = util.BytesToObject(
+                crypto.SymmetricDecrypt(
+                    k,
+                    dataserver_Get_ptr_
+                )
             )
         except:
-            # raise util.DropboxError("Invalid password!")
-            raise util.DropboxError("Decryption failed.")
+            raise util.DropboxError("Decryption failed!  Invalid password?")
 
         sig = dataserver.Get(ptr[-1:]+ptr[:-1])
         valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver_Get_ptr_, sig)
