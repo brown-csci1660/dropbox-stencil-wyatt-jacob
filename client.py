@@ -486,17 +486,19 @@ class User:
 
     @classmethod
     def read(cls, ptr, k, pk):
+        dataserver_Get_ptr_ = dataserver.Get(ptr)
         data_opt = None
         try:
             data_opt = crypto.SymmetricDecrypt(
                 k,
-                dataserver.Get(ptr)
+                dataserver_Get_ptr_
             )
         except:
-            raise util.DropboxError("Invalid password!")
+            # raise util.DropboxError("Invalid password!")
+            raise util.DropboxError("Decryption failed.")
 
         sig = dataserver.Get(ptr[-1:]+ptr[:-1])
-        valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver.Get(ptr), sig)
+        valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver_Get_ptr_, sig)
         if not valid or not data_opt:
             raise util.DropboxError("Integrity violation")
         else:
@@ -683,7 +685,7 @@ def create_user(username: str, password: str) -> User:
 
     try:
         keyserver.Set(username, pk)
-    except ValueError("IdentifierAlreadyTaken"):
+    except ValueError:
         raise util.DropboxError("That username is not available!")
 
     salt = username.encode("ascii") + b"super secret academy salt"
@@ -711,6 +713,9 @@ def authenticate_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    sk = crypto.AsymmetricDecryptKey.from_bytes(User.read(root_ptr, root_key, pk))
+    sk_bytes = User.read(root_ptr, root_key, pk)
+    if not sk_bytes[:5] == b"-"*5:
+        raise util.DropboxError("Invalid password!")
+    sk = crypto.AsymmetricDecryptKey.from_bytes(sk_bytes)
 
     return User(username, root_key, pk, sk)
