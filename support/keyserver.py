@@ -62,7 +62,7 @@ class Keyserver:
         if identifier in self.data:
             return self.data[identifier]
         else:
-            raise ValueError("IdentifierAlreadyTaken")
+            raise ValueError("IdentifierAlreadyTaken")  # Should say "does not exist" or better.
 
     def Delete(self, identifier: str) -> None:
         """
