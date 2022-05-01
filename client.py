@@ -743,25 +743,22 @@ class User:
                crypto.SecureRandom(16),
                data
            )
-        )  # set root
+        )  # set data
         dataserver.Set(ptr[-1:]+ptr[:-1],
             crypto.SignatureSign(
                 crypto.SignatureSignKey(sk.libPrivKey),
                 dataserver.Get(ptr),
             )
-        )  # sign root
+        )  # sign data
 
     @classmethod
     def read(cls, ptr, k, pk):
         data_opt = None
         try:
-            data_opt =\
-            crypto.SymmetricDecrypt(
+            data_opt = crypto.SymmetricDecrypt(
                 k,
                 dataserver.Get(ptr)
             )
-            #util.BytesToObject(
-            #)
         except:
             raise util.DropboxError("Invalid password!")
 
@@ -816,7 +813,6 @@ def authenticate_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    sk_bytes = User.read(root_ptr, root_key, pk)
-    sk = crypto.AsymmetricDecryptKey.from_bytes(sk_bytes)
+    sk = crypto.AsymmetricDecryptKey.from_bytes(User.read(root_ptr, root_key, pk))
 
     return User(username, root_key, pk, sk)
