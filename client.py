@@ -736,6 +736,45 @@ class User:
                     new_key_signed = util.ObjectToBytes([encrypted_new_key, new_key_signature])
                     dataserver.Set(old_ptr, new_key_signed)
 
+    @classmethod
+    def write(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
+        dataserver.Set(ptr,
+           crypto.SymmetricEncrypt(
+               k,
+               crypto.SecureRandom(16),
+               data
+           )
+        )  # set root
+        dataserver.Set(ptr[-1:]+ptr[:-1],
+            crypto.SignatureSign(
+                crypto.SignatureSignKey(sk.libPrivKey),
+                dataserver.Get(ptr),
+            )
+        )  # sign root
+
+    @classmethod
+    def read(cls, ptr, k, pk):
+        data_opt = None
+        try:
+            data_opt =\
+            crypto.SymmetricDecrypt(
+                k,
+                dataserver.Get(ptr)
+            )
+            #util.BytesToObject(
+            #)
+        except:
+            raise util.DropboxError("Invalid password!")
+
+        sig = dataserver.Get(ptr[-1:]+ptr[:-1])
+        valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver.Get(ptr), sig)
+        if not valid or not data_opt:
+            raise util.DropboxError("Root integrity violation")
+        else:
+            return data_opt
+
+
+
 def create_user(username: str, password: str) -> User:
     """
     The specification for this function is at:
@@ -751,7 +790,7 @@ def create_user(username: str, password: str) -> User:
 
     try:
         keyserver.Set(username, pk)
-    except ValueError:#("IdentifierAlreadyTaken"):
+    except ValueError("IdentifierAlreadyTaken"):
         raise util.DropboxError("That username is not available!")
 
     salt = username.encode("ascii") + b"super secret academy salt"
@@ -759,19 +798,8 @@ def create_user(username: str, password: str) -> User:
     root_key = crypto.PasswordKDF(password, salt, 16)
 
     root = {"sk_bytes": bytes(sk)}
-    dataserver.Set(root_ptr,
-       crypto.SymmetricEncrypt(
-           root_key,
-           crypto.SecureRandom(16),
-           util.ObjectToBytes(root)
-       )
-    )  # set root
-    dataserver.Set(root_ptr[-1:]+root_ptr[:-1],
-        crypto.SignatureSign(
-            crypto.SignatureSignKey(sk.libPrivKey),
-            dataserver.Get(root_ptr),
-        )
-    )  # sign root
+
+    User.write(root_ptr, util.ObjectToBytes(root), root_key, sk)
 
     return authenticate_user(username, password)
 
@@ -794,24 +822,9 @@ def authenticate_user(username: str, password: str) -> User:
     salt = username.encode("ascii") + b"super secret academy salt"
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
-    root_opt = None
-    try:
-        root_opt = util.BytesToObject(
-            crypto.SymmetricDecrypt(
-                root_key,
-                dataserver.Get(root_ptr)
-            )
-        )
-    except:
-        # raise util.DropboxError("Invalid username or password!")
-        raise util.DropboxError("Invalid password!")
 
-    sig = dataserver.Get(root_ptr[-1:]+root_ptr[:-1])
-    valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver.Get(root_ptr), sig)
-    if not valid or not root_opt:
-        raise util.DropboxError("Root integrity violation")
-
-    root = root_opt
+    root_bytes = User.read(root_ptr, root_key, pk)
+    root = util.BytesToObject(root_bytes)
     sk = crypto.AsymmetricDecryptKey.from_bytes(root["sk_bytes"])
 
     return User(username, root_key, root, pk, sk)
