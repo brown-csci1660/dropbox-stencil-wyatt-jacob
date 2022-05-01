@@ -768,7 +768,7 @@ class User:
         sig = dataserver.Get(ptr[-1:]+ptr[:-1])
         valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver.Get(ptr), sig)
         if not valid or not data_opt:
-            raise util.DropboxError("Root integrity violation")
+            raise util.DropboxError("Integrity violation")
         else:
             return data_opt
 
@@ -783,9 +783,8 @@ def create_user(username: str, password: str) -> User:
     pk, sk = crypto.AsymmetricKeyGen()
 
     try:
-        keyserver.Set("", None)# ,0)
-    except ValueError:
-        pass
+        keyserver.Set("", None)
+    except ValueError: pass
 
     try:
         keyserver.Set(username, pk)
@@ -796,10 +795,7 @@ def create_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    # root = {"sk_bytes": bytes(sk)}
-    root = bytes(sk)
-
-    User.write(root_ptr, root, root_key, sk)
+    User.write(root_ptr, bytes(sk), root_key, sk)
 
     return authenticate_user(username, password)
 
@@ -811,13 +807,10 @@ def authenticate_user(username: str, password: str) -> User:
     """
 
     pk = None
-    sk = None
     try:
         pk = keyserver.Get(username)
     finally:
-        if not pk:
-            # raise util.DropboxError("Invalid username or password!")
-            raise util.DropboxError("Invalid username!")
+        if not pk: raise util.DropboxError("Invalid username!")
 
     salt = username.encode("ascii") + b"super secret academy salt"
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
