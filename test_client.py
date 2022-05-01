@@ -58,6 +58,7 @@ class ClientTests(unittest.TestCase):
 
     def test_authenticate_user_wrong_password(self):
         u = create_user("usr", "pswd")
+        self.assertRaises(util.DropboxError, lambda: authenticate_user("usr", "pmsd"))  # pswd upsidedown
         self.assertRaises(util.DropboxError, lambda: authenticate_user("usr", ""))
 
     def test_whitespace_username(self):
