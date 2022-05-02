@@ -353,7 +353,7 @@ class ClientTests(unittest.TestCase):
         usr2.upload_file("shared_file", b"different file data")
         self.assertEqual(usr1.download_file("shared_file"), b"different file data")
 
-        def test_share_revoke_reshare1(self):
+    def test_share_revoke_reshare1(self):
         usr1 = create_user("usr1", "pswd1")
         usr2 = create_user("usr2", "pswd2")
         usr3 = create_user("usr3", "pwsd3")
