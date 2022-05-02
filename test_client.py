@@ -353,12 +353,77 @@ class ClientTests(unittest.TestCase):
         usr2.upload_file("shared_file", b"different file data")
         self.assertEqual(usr1.download_file("shared_file"), b"different file data")
 
+        def test_share_revoke_reshare1(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+        usr3 = create_user("usr3", "pwsd3")
+
+        usr1.upload_file("shared_file", b"some data")
+
+        usr1.share_file("shared_file", "usr3")
+        usr3.receive_file("shared_file", "usr1")
+
+        usr1.share_file("shared_file", "usr2")
+        usr2.receive_file("shared_file", "usr1")
+        usr1.revoke_file("shared_file", "usr2")
+
+        #usr3.share_file("shared_file", "usr2")
+        self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
+        #usr2.receive_file("shared_file", "usr3")
+
+        #self.assertEqual(usr2.download_file("shared_file"), b"some data")
+
+    def test_share_revoke_reshare2(self):
+        # Same as before, but receive is called after the file is shared a second time
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+        usr3 = create_user("usr3", "pwsd3")
+
+        usr1.upload_file("shared_file", b"some data")
+
+        usr1.share_file("shared_file", "usr3")
+        usr3.receive_file("shared_file", "usr1")
+
+        usr1.share_file("shared_file", "usr2")
+        usr1.revoke_file("shared_file", "usr2")
+
+        usr3.share_file("shared_file", "usr2")
+        self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
+        usr2.receive_file("shared_file", "usr3")
+
+        self.assertEqual(usr2.download_file("shared_file"), b"some data")
+
+    def __test_share_cycle(self):
+        usr1 = create_user("usr1", "pswd1")
+        usr2 = create_user("usr2", "pswd2")
+        usr3 = create_user("usr3", "pwsd3")
+
+        usr1.upload_file("shared_file", b"data")
+
+        usr1.share_file("shared_file", "usr2")
+        usr2.receive_file("shared_file", "usr1")
+
+        usr2.share_file("shared_file", "usr3")
+        usr3.receive_file("shared_file", "usr2")
+
+        usr3.share_file("shared_file", "usr1")
+        usr1.receive_file("shared_file", "usr3")
+
+        usr3.revoke_file("shared_file", "usr1")
+
+        self.assertEqual(usr3.download_file("shared_file"), b"data")
+
+    def __test_create_user_existing_key(self):
+        pk, sk = crypto.AsymmetricKeyGen()
+        keyserver.Set("usr1", pk)
+
+        thunk = lambda: create_user("usr1", "pswd1")
+        self.assertRaises(util.DropboxError, thunk)
+
 
 
     #TODO:
-        # test share_file with a file not owned by the calling user
         # test sharing multiple files
-        # test that shares are unaffected by owner overwriting the file
 
 # DO NOT EDIT BELOW THIS LINE ##################################################
 
