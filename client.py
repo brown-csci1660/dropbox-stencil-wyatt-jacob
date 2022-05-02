@@ -87,13 +87,7 @@ class User:
         dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
 
         # Encrypt and sign file metadata
-        """ hybrid encryption start "'"
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
-        """
-        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
-        """ hybrid encryption  end  """
-        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(self.pk, metadata)
 
         # Store the file in a memloc and save location to user's root structure
         file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
@@ -164,13 +158,7 @@ class User:
         metadata["share_tree"][recipient] = True
 
         # Encrypt and sign file metadata for owner
-        """ hybrid encryption start "'"
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
-        """
-        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
-        """ hybrid encryption  end  """
-        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(self.pk, metadata)
 
         # Store the file in a memloc and save location to user's root structure
         file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
@@ -180,13 +168,7 @@ class User:
         )
 
         # Encrypt and sign file metadata for recipient
-        """ hybrid encryption start "'"
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
-        """
-        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
-        encrypted_metadata = crypto.AsymmetricEncrypt(recipient_pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
-        """ hybrid encryption  end  """
-        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(recipient_pk, metadata)
 
         # Store the file in a memloc and save location to recipient's root structure
         file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
@@ -218,15 +200,8 @@ class User:
         # metadata["share_tree"][sendefr] = True
         metadata["owner"] = sender
 
-
         # Encrypt and sign file metadata
-        """ hybrid encryption start "'"
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
-        """
-        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
-        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(metadata))
-        """ hybrid encryption  end  """
-        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_metadata)
+        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(self.pk, metadata)
 
         # Store the file in a memloc and save location to user's root structure
         file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
@@ -440,15 +415,7 @@ class User:
                         metadata["ptr"] = new_ptr
 
                         # Encrypt and sign file metadata
-                        """ hybrid encryption start "'"
-                        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(metadata))
-                        """
-                        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
-                        encrypted_metadata = crypto.AsymmetricEncrypt(self.pk, ephemeral) + crypto.SymmetricEncrypt(
-                            ephemeral, iv, util.ObjectToBytes(metadata))
-                        """ hybrid encryption  end  """
-                        metadata_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey),
-                                                                  encrypted_metadata)
+                        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(self.pk, metadata)
 
                         # Store the file in a memloc and save location to user's root structure
                         file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
@@ -504,6 +471,16 @@ class User:
         except ValueError:
             return False
 
+    def HybridEncryptAndSign(self, pk, data, sk=None):  # encryption key, data, secret (signing) key
+        sk = sk or self.sk
+        """ hybrid encryption start "'"
+        encrypted_data = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(data))
+        """
+        ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
+        encrypted_data = crypto.AsymmetricEncrypt(pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(data))
+        """ hybrid encryption  end  """
+        data_signature = crypto.SignatureSign(crypto.SignatureSignKey(sk.libPrivKey), encrypted_data)
+        return encrypted_data, data_signature
 
 def create_user(username: str, password: str) -> User:
     """
