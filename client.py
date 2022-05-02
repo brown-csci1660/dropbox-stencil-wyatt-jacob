@@ -196,6 +196,7 @@ class User:
         except util.DropboxError:
             raise util.DropboxError("Failed to first open the file locally.")
 
+        self.delete_file(filename, owner=sender)
 
         # metadata["share_tree"][sendefr] = True
         metadata["owner"] = sender
@@ -237,11 +238,7 @@ class User:
 
         data = self.download_file(filename)
         # self.upload_file(filename, b"file " + filename.encode() + b" has been deleted")
-        #delete_file
-        dataserver.Delete(crypto.HashKDF(self.root_key, filename))
-        dataserver.Delete(old_ptr)  # technically redundant, so could clean up a lot of code if we need to
-        #maybe also delete file contents/body
-        # print("deleted old file")
+        self.delete_file(filename)
         self.upload_file(filename, data)  # (re)upload with a different key
 
         metadata = None
@@ -411,6 +408,26 @@ class User:
 
         return data
 
+    def delete_file(self, filename: str, owner=None):
+        try:
+            metadata, header_bytes = self.__download_file(filename, owner=owner, whence="metadata and header only")
+
+            header_ptr = metadata["ptr"]
+            header_ptr_int = int.from_bytes(header_ptr, 'little')
+            parts_count = int.from_bytes(header_bytes, 'little')
+            for i in range(header_ptr_int, header_ptr_int+parts_count):
+                ptr = int.to_bytes(i, 16, 'little')
+                dataserver.Delete(ptr)  # destroy header and then all following data blocks
+
+            ptr_metadata = (
+                crypto.HashKDF(crypto.Hash(owner.encode() + self.username.encode()), filename)[:16]
+                if owner else
+                crypto.HashKDF(self.root_key, filename)
+            )
+            dataserver.Delete(ptr_metadata)  # delete metadata
+        except ValueError:
+            raise util.DropboxError("File corrupted before deletion could proceed.")
+
     def isSet(self, ptr):
         try:
             dataserver.Get(ptr)
@@ -485,6 +502,7 @@ class User:
             raise util.DropboxError("Integrity violation")
         else:
             return data_opt
+
 
 def create_user(username: str, password: str) -> User:
     """
