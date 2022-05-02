@@ -190,13 +190,23 @@ class User:
             if not sender_pk:
                 raise util.DropboxError("No such sender exists!")
 
+        existing_local_file_metadata = None
+        try:
+            existing_local_file_metadata = self.__download_file(filename, whence="metadata only")
+        except util.DropboxError:
+            pass  # We expect this, that there shouldn't already be a local file of the same name.
+        finally:
+            if existing_local_file_metadata:
+                raise util.DropboxError("There is a local file with that same name.  Aborting for its protection, as to not overwrite.")
+
         metadata = None
         try:
             metadata = self.__download_file(filename, whence="metadata only", owner=sender, owner_pk=sender_pk)
         except util.DropboxError:
             raise util.DropboxError("Failed to first open the file locally.")
 
-        self.delete_file(filename, owner=sender)
+        # Uncomment to allow calling receive twice for the same shared file
+        # self.delete_file(filename, owner=sender, owner_pk=sender_pk, whence="metadata only")
 
         # metadata["share_tree"][sendefr] = True
         metadata["owner"] = sender
@@ -217,13 +227,15 @@ class User:
         http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/sharing/revoke-file.html
         """
 
-        recipient_pk = None
+        old_recipient_pk = None
         try:
-            recipient_pk = keyserver.Get(old_recipient)
+            old_recipient_pk = keyserver.Get(old_recipient)
         finally:
-            if not recipient_pk:
+            if not old_recipient_pk:
                 raise util.DropboxError("No such old recipient exists!")
-        del recipient_pk
+        # self.delete_file(filename, old_recipient, old_recipient_pk, whence="metadata only", owner_is_recipient=True)  # delete old intermediate meta
+        dataserver.Delete(crypto.HashKDF(crypto.Hash(self.username.encode()+old_recipient.encode()), filename)[:16],)
+        del old_recipient_pk
 
         share_tree = None
         old_ptr = None
@@ -251,7 +263,7 @@ class User:
         new_ptr = metadata["ptr"]
 
         for user in filter(lambda e: share_tree[e], share_tree):
-            # self.share_file()
+            # self.share_file(filename, username)
 
             user_pk = None
             try:
@@ -408,16 +420,20 @@ class User:
 
         return data
 
-    def delete_file(self, filename: str, owner=None):
+    def delete_file(self, filename: str, owner=None, owner_pk=None, whence="file and metadata"):
         try:
-            metadata, header_bytes = self.__download_file(filename, owner=owner, whence="metadata and header only")
+            metadata = None
+            if whence == "file and metadata":
+                metadata, header_bytes = self.__download_file(filename, owner=owner, whence="metadata and header only")
 
-            header_ptr = metadata["ptr"]
-            header_ptr_int = int.from_bytes(header_ptr, 'little')
-            parts_count = int.from_bytes(header_bytes, 'little')
-            for i in range(header_ptr_int, header_ptr_int+parts_count):
-                ptr = int.to_bytes(i, 16, 'little')
-                dataserver.Delete(ptr)  # destroy header and then all following data blocks
+                header_ptr = metadata["ptr"]
+                header_ptr_int = int.from_bytes(header_ptr, 'little')
+                parts_count = int.from_bytes(header_bytes, 'little')
+                for i in range(header_ptr_int, header_ptr_int+parts_count):
+                    ptr = int.to_bytes(i, 16, 'little')
+                    dataserver.Delete(ptr)  # destroy header and then all following data blocks
+            else:  # if whence == "metadata only"
+                metadata = self.__download_file(filename, owner, owner_pk, whence)#="metadata only")
 
             ptr_metadata = (
                 crypto.HashKDF(crypto.Hash(owner.encode() + self.username.encode()), filename)[:16]
