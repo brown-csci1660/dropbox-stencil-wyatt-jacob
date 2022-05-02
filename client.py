@@ -263,50 +263,13 @@ class User:
                 if not user_pk:
                     raise util.DropboxError("No such recipient exists!")
                 else:
-                    # Encrypt and sign file metadata
+                    # Encrypt and sign key-switching (meta)data
                     encrypted_new_key = crypto.AsymmetricEncrypt(user_pk, new_key+new_ptr)
                     new_key_signature = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), encrypted_new_key)
 
                     # Store the file in a memloc and save location to user's root structure
                     new_key_signed = util.ObjectToBytes([encrypted_new_key, new_key_signature])
                     dataserver.Set(old_ptr, new_key_signed)
-
-    @classmethod
-    def write(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
-        dataserver.Set(ptr,
-           crypto.SymmetricEncrypt(
-               k,
-               crypto.SecureRandom(16),
-               util.ObjectToBytes(data)
-           )
-        )  # set data
-        dataserver.Set(ptr[-1:]+ptr[:-1],
-            crypto.SignatureSign(
-                crypto.SignatureSignKey(sk.libPrivKey),
-                dataserver.Get(ptr),
-            )
-        )  # sign data
-
-    @classmethod
-    def read(cls, ptr, k, pk):
-        dataserver_Get_ptr_ = dataserver.Get(ptr)
-        data_opt = None
-        try:
-            data_opt = util.BytesToObject(
-                crypto.SymmetricDecrypt(
-                    k,
-                    dataserver_Get_ptr_
-                )
-            )
-        except:
-            raise util.DropboxError("Decryption failed!  Invalid password?")
-
-        sig = dataserver.Get(ptr[-1:]+ptr[:-1])
-        valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver_Get_ptr_, sig)
-        if not valid or not data_opt:
-            raise util.DropboxError("Integrity violation")
-        else:
-            return data_opt
 
     def __download_file(self, filename: str, owner=None, owner_pk=None, whence="file contents") -> Union[Union[object, bytes, int], Any]:
         encrypted_metadata, metadata_signature = (None, None)
@@ -335,23 +298,7 @@ class User:
 
         metadata = None
         try:
-            """ hybrid decryption start "'"
-            metadata = util.BytesToObject(
-                crypto.AsymmetricDecrypt(
-                    self.sk,
-                    encrypted_metadata
-                )
-            )
-            """
-            metadata = util.BytesToObject(
-                crypto.SymmetricDecrypt(
-                    crypto.AsymmetricDecrypt(
-                        self.sk,
-                        encrypted_metadata[:2048 // 8]
-                    ), encrypted_metadata[2048 // 8:]
-                )
-            )
-            """ hybrid decryption  end  """
+            metadata = self.HybridDecrypt(self.sk, encrypted_metadata)
 
             assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
         finally:
@@ -481,6 +428,63 @@ class User:
         """ hybrid encryption  end  """
         data_signature = crypto.SignatureSign(crypto.SignatureSignKey(sk.libPrivKey), encrypted_data)
         return encrypted_data, data_signature
+
+    def HybridDecrypt(self, sk, encrypted_data):#, data_signature, pk=None):  # decryption key, data, public (verification) key   #AndVerify   # pk = pk or self.pk
+        """ hybrid decryption start "'"
+        metadata = util.BytesToObject(
+            crypto.AsymmetricDecrypt(
+                self.sk,
+                encrypted_metadata
+            )
+        )
+        """
+        data = util.BytesToObject(
+            crypto.SymmetricDecrypt(
+                crypto.AsymmetricDecrypt(
+                    sk,
+                    encrypted_data[:2048 // 8]
+                ), encrypted_data[2048 // 8:]
+            )
+        )
+        """ hybrid decryption  end  """
+        return data
+
+    @classmethod
+    def write(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
+        dataserver.Set(ptr,
+           crypto.SymmetricEncrypt(
+               k,
+               crypto.SecureRandom(16),
+               util.ObjectToBytes(data)
+           )
+        )  # set data
+        dataserver.Set(ptr[-1:]+ptr[:-1],
+            crypto.SignatureSign(
+                crypto.SignatureSignKey(sk.libPrivKey),
+                dataserver.Get(ptr),
+            )
+        )  # sign data
+
+    @classmethod
+    def read(cls, ptr, k, pk):
+        dataserver_Get_ptr_ = dataserver.Get(ptr)
+        data_opt = None
+        try:
+            data_opt = util.BytesToObject(
+                crypto.SymmetricDecrypt(
+                    k,
+                    dataserver_Get_ptr_
+                )
+            )
+        except:
+            raise util.DropboxError("Decryption failed!  Invalid password?")
+
+        sig = dataserver.Get(ptr[-1:]+ptr[:-1])
+        valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver_Get_ptr_, sig)
+        if not valid or not data_opt:
+            raise util.DropboxError("Integrity violation")
+        else:
+            return data_opt
 
 def create_user(username: str, password: str) -> User:
     """
