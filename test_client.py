@@ -283,7 +283,7 @@ class ClientTests(unittest.TestCase):
         #usr2.receive_file("shared_file", "usr1")
 
         # this call should error because "shared_file" already exists
-        #self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
+        self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
 
         # usr3 should lose access to usr2's overwritten file
         #self.assertRaises(util.DropboxError, lambda: usr3.download_file("shared_file"))
@@ -312,7 +312,7 @@ class ClientTests(unittest.TestCase):
         usr1.share_file("shared_file", "usr2")
         usr1.revoke_file("shared_file", "usr2")
 
-        #self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
+        self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
 
         self.assertRaises(util.DropboxError, lambda: usr2.download_file("shared_file"))
 
@@ -330,6 +330,29 @@ class ClientTests(unittest.TestCase):
         usr3.receive_file("shared_file", "usr1")
 
         usr3.share_file("shared_file", "usr3")
+        
+   
+    def test_illegal_share(self):
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw2")
+        usr3 = create_user("usr3", "psw3")
+
+        usr1.upload_file("shared_file", b"file data")
+        thunk = lambda: usr2.share_file("shared_file", "usr3")
+        self.assertRaises(util.DropboxError, thunk)
+
+    def test_shared_file_overwite(self):
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw2")
+
+        usr1.upload_file("shared_file", b"file data")
+
+        usr1.share_file("shared_file", "usr2")
+        usr2.receive_file("shared_file", "usr1")
+
+        usr2.upload_file("shared_file", b"different file data")
+        self.assertEqual(usr1.download_file("shared_file"), b"different file data")
+
 
 
     #TODO:
