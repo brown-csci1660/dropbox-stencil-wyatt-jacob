@@ -386,7 +386,8 @@ class User:
 
                         dataserver.Delete(ptr)
 
-                        _return = self.__download_file(filename, owner, owner_pk, whence)
+                        # _return = self.__download_file(filename, owner, owner_pk, whence)
+                        _return = self.__download_file(filename, whence=whence)
                         data_parts = [None]*2  # escape-the-return hack
                         return _return
                 else:
