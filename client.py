@@ -151,7 +151,8 @@ class User:
 
         metadata = None
         try:
-            metadata = self.__download_file(filename, whence="metadata only")
+            metadata, _ = self.__download_file(filename, whence="metadata and header only")
+            # metadata = self.__download_file(filename, whence="metadata only")
         except util.DropboxError:
             raise util.DropboxError("Failed to first open the file locally.")
 
@@ -196,7 +197,7 @@ class User:
         except util.DropboxError:
             pass  # We expect this, that there shouldn't already be a local file of the same name.
         finally:
-            if existing_local_file_metadata:
+            if existing_local_file_metadata:# and not "owner" in existing_local_file_metadata:#["owner"] == sender:  # test second clause
                 raise util.DropboxError("There is a local file with that same name.  Aborting for its protection, as to not overwrite.")
 
         metadata = None
@@ -234,7 +235,10 @@ class User:
             if not old_recipient_pk:
                 raise util.DropboxError("No such old recipient exists!")
         # self.delete_file(filename, old_recipient, old_recipient_pk, whence="metadata only", owner_is_recipient=True)  # delete old intermediate meta
-        dataserver.Delete(crypto.HashKDF(crypto.Hash(self.username.encode()+old_recipient.encode()), filename)[:16],)
+        try:
+            dataserver.Delete(crypto.HashKDF(crypto.Hash(self.username.encode()+old_recipient.encode()), filename)[:16])
+        except ValueError:
+            raise util.DropboxError("File corrupted before deletion (as part of the revocation process) could proceed.")
         del old_recipient_pk
 
         share_tree = None
@@ -382,7 +386,7 @@ class User:
 
                         dataserver.Delete(ptr)
 
-                        _return = self.download_file(filename)
+                        _return = self.__download_file(filename, owner, owner_pk, whence)
                         data_parts = [None]*2  # escape-the-return hack
                         return _return
                 else:
