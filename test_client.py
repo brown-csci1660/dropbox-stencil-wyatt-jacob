@@ -233,6 +233,7 @@ class ClientTests(unittest.TestCase):
         usr3 = create_user("usr3", "psw3")
         usr4 = create_user("usr4", "psw4")
         usr5 = create_user("usr5", "psw5")
+        usr6 = create_user("usr6", "psw6")
 
         usr1.upload_file("shared_file", b"file data")
         usr1.share_file("shared_file", "usr2")
@@ -245,11 +246,15 @@ class ClientTests(unittest.TestCase):
         usr4.share_file("shared_file", "usr5")
         usr5.receive_file("shared_file", "usr4")
 
+        usr2.share_file("shared_file", "usr6")
+        usr6.receive_file("shared_file", "usr2")
         self.assertEqual(usr5.download_file("shared_file"), b"file data")
 
         usr1.revoke_file("shared_file", "usr3")
         self.assertEqual(usr2.download_file("shared_file"), b"file data")
         self.assertRaises(util.DropboxError, lambda: usr5.download_file("shared_file"))
+
+        self.assertEqual(usr6.download_file("shared_file"), b"file data")
 
     def test_missing_receive_file_call(self):
         usr1 = create_user("usr1", "pswd1")
@@ -330,8 +335,8 @@ class ClientTests(unittest.TestCase):
         usr3.receive_file("shared_file", "usr1")
 
         usr3.share_file("shared_file", "usr3")
-        
-   
+
+
     def test_illegal_share(self):
         usr1 = create_user("usr1", "psw1")
         usr2 = create_user("usr2", "psw2")
@@ -341,6 +346,32 @@ class ClientTests(unittest.TestCase):
         thunk = lambda: usr2.share_file("shared_file", "usr3")
         self.assertRaises(util.DropboxError, thunk)
 
+    def test_illegal_revoke(self):
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw2")
+        usr3 = create_user("usr3", "psw3")
+
+        usr1.upload_file("shared_file", b"file data")
+        usr1.share_file("shared_file", "usr2")
+
+        thunk = lambda: usr3.revoke_file("shared_file", "usr2")
+        self.assertRaises(util.DropboxError, thunk)
+
+    def test_illegal_revoke_multilevel(self):
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw2")
+        usr3 = create_user("usr3", "psw3")
+
+        usr1.upload_file("shared_file", b"file data")
+        usr1.share_file("shared_file", "usr2")
+
+        usr1.share_file("shared_file", "usr3")
+        usr3.receive_file("shared_file", "usr1")
+        usr1.revoke_file("shared_file", "usr3")
+
+        
+        thunk = lambda: usr3.revoke_file("shared_file", "usr2")
+        self.assertRaises(util.DropboxError, thunk)
     def test_shared_file_overwite(self):
         usr1 = create_user("usr1", "psw1")
         usr2 = create_user("usr2", "psw2")
@@ -367,11 +398,11 @@ class ClientTests(unittest.TestCase):
         usr2.receive_file("shared_file", "usr1")
         usr1.revoke_file("shared_file", "usr2")
 
-        #usr3.share_file("shared_file", "usr2")
+        usr3.share_file("shared_file", "usr2")
         self.assertRaises(util.DropboxError, lambda: usr2.receive_file("shared_file", "usr1"))
-        #usr2.receive_file("shared_file", "usr3")
+        usr2.receive_file("shared_file", "usr3")
 
-        #self.assertEqual(usr2.download_file("shared_file"), b"some data")
+        self.assertEqual(usr2.download_file("shared_file"), b"some data")
 
     def test_share_revoke_reshare2(self):
         # Same as before, but receive is called after the file is shared a second time
@@ -420,10 +451,31 @@ class ClientTests(unittest.TestCase):
         thunk = lambda: create_user("usr1", "pswd1")
         self.assertRaises(util.DropboxError, thunk)
 
+    def multi_level_share(self):
+        usr1 = create_user("usr1", "psw1")
+        usr2 = create_user("usr2", "psw3")
+        usr3 = create_user("usr3", "psw3")
+        usr4 = create_user("usr4", "psw4")
+        usr5 = create_user("usr5", "psw5")
 
+        usr1.upload_file("shared_file", b"file data")
+        usr1.share_file("shared_file", "usr2")
+        usr1.share_file("shared_file", "usr3")
+        usr2.receive_file("shared_file", "usr1")
+        usr3.receive_file("shared_file", "usr1")
 
-    #TODO:
-        # test sharing multiple files
+        usr3.share_file("shared_file", "usr4")
+        usr4.receive_file("shared_file", "usr3")
+        usr4.share_file("shared_file", "usr5")
+        usr5.receive_file("shared_file", "usr4")
+
+        self.assertEqual(usr5.download_file("shared_file"), b"file data")
+
+        usr4.revoke_file("shared_file", "usr5")
+        self.assertEqual(usr2.download_file("shared_file"), b"file data")
+        self.assertEqual(usr4.download_file("shared_file"), b"file data")
+        self.assertRaises(util.DropboxError, lambda: usr5.download_file("shared_file"))
+
 
 # DO NOT EDIT BELOW THIS LINE ##################################################
 
