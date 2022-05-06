@@ -90,7 +90,7 @@ class User:
         dataserver.Set(ptr, encrypted_data)
         dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
 
-        self.save_metadata(metadata)
+        self.__save_metadata__(metadata)
 
     def download_file(self, filename: str) -> bytes:
         """
@@ -157,7 +157,7 @@ class User:
                 return children
         self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], local_node_callback=add_share)
 
-        self.save_metadata(metadata, share_to=recipient)
+        self.__save_metadata__(metadata, share_to=recipient)
 
     def receive_file(self, filename: str, sender: str) -> None:
         """
@@ -180,11 +180,11 @@ class User:
             if existing_local_file_metadata and existing_local_file_metadata["owner"] == self.username:  # test second clause
                 raise util.DropboxError("There is a local file with that same name.  Aborting for its protection, as to not overwrite.")
 
-        metadata, err = self.read_metadata(filename, sender)
+        metadata, err = self.__read_metadata__(filename, sender)
         if metadata is None:
             raise util.DropboxError("Failed to receive file from sender: " + err)
 
-        self.save_metadata(metadata)
+        self.__save_metadata__(metadata)
 
     def revoke_file(self, filename: str, old_recipient: str) -> None:
         """
@@ -235,25 +235,22 @@ class User:
             raise util.DropboxError("Failed to retrieve file's new metadata.")
 
         metadata["share_tree"] = share_tree
-        self.save_metadata(metadata)
+        self.__save_metadata__(metadata)
         def update_share(usr, children):
-            self.save_metadata(metadata, share_to = usr)
+            self.__save_metadata__(metadata, share_to = usr)
             return children
         self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], update_share)
 
-    def __download_file(self, filename: str, owner=None, owner_pk=None, whence="file contents", rec_flag = False) -> Union[Union[object, bytes, int], Any]:
+    def __download_file(self, filename: str, owner=None, owner_pk=None, whence="file contents") -> Union[Union[object, bytes, int], Any]:
         err2 = ""
-        err3 = ""
-        metadata, err1 = self.read_metadata(filename)
-        if metadata is not None and not rec_flag:
-            source_metadata, err2 = self.read_metadata(filename, metadata["owner"])
+        metadata, err1 = self.__read_metadata__(filename)
+        if metadata is not None:
+            source_metadata, err2 = self.__read_metadata__(filename, metadata["owner"])
             if metadata != source_metadata and source_metadata is not None:
                 metadata = source_metadata
-                self.save_metadata(metadata)
-        if metadata is None and owner is not None:
-            metadata, err3 = self.read_metadata(filename, owner)
+                self.__save_metadata__(metadata)
         if metadata is None:
-            raise util.DropboxError("Could not find valid metadata for file | " + str(err1) + " : " + str(err2) + " : " + str(err3))
+            raise util.DropboxError("Could not find valid metadata for file | " + str(err1) + " : " + str(err2))
         if whence == "metadata only":
             return metadata
         # else:
@@ -390,7 +387,7 @@ class User:
                     share_tree["signature"] = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), util.ObjectToBytes(share_tree["children"]))
                     dataserver.Set(share_tree_ptr, util.ObjectToBytes(share_tree))
 
-    def read_metadata(self, filename, share_source=None):
+    def __read_metadata__(self, filename, share_source=None):
         encrypted_metadata = None
         metadata_signature = None
         source = crypto.HashKDF(self.root_key, filename)
@@ -416,7 +413,7 @@ class User:
             return None, "failed to decrypt"
         return metadata, None
 
-    def save_metadata(self, metadata, share_to=None):
+    def __save_metadata__(self, metadata, share_to=None):
         filename = metadata["filename"]
         pk = self.pk if share_to is None else keyserver.Get(share_to)
 
@@ -434,7 +431,7 @@ class User:
 
         
     @classmethod
-    def write(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
+    def __write_root__(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
         dataserver.Set(ptr,
            crypto.SymmetricEncrypt(
                k,
@@ -450,7 +447,7 @@ class User:
         )  # sign data
 
     @classmethod
-    def read(cls, ptr, k, pk):
+    def __read_root__(cls, ptr, k, pk):
         dataserver_Get_ptr_ = dataserver.Get(ptr)
         data_opt = None
         try:
@@ -492,7 +489,7 @@ def create_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    User.write(root_ptr, bytes(sk), root_key, sk)
+    User.__write_root__(root_ptr, bytes(sk), root_key, sk)
 
     return authenticate_user(username, password)
 
@@ -513,6 +510,6 @@ def authenticate_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    sk = crypto.AsymmetricDecryptKey.from_bytes(User.read(root_ptr, root_key, pk))
+    sk = crypto.AsymmetricDecryptKey.from_bytes(User.__read_root__(root_ptr, root_key, pk))
 
     return User(username, root_key, pk, sk)
