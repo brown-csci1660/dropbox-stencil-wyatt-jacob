@@ -504,10 +504,8 @@ class ClientTests(unittest.TestCase):
 
     def test_share_reupload(self):
         usr1 = create_user("usr1", "pwd1")
-        _usr2 = create_user("usr2", "pwd2")
 
         usr1.upload_file("shared_file", b'uploaded data')
-        usr1.share_file("shared_file", "usr2")
         usr1.append_file("shared_file", b' appended data')
 
         usr1.upload_file("shared_file", b"file data")
