@@ -32,7 +32,7 @@ from support.keyserver import keyserver
 # DO NOT EDIT ABOVE THIS LINE ##################################################
 
 class User:
-    def __init__(self, username, root_key, pk, sk) -> None:
+    def __init__(self, username, root_key, private_keys) -> None:
         """
         Class constructor for the `User` class.
 
@@ -41,8 +41,8 @@ class User:
         """
         self.username = username
         self.root_key = root_key
-        self.pk = pk
-        self.sk = sk
+        self.private_keys = private_keys
+
 
     def upload_file(self, filename: str, data: bytes) -> None:
         """
@@ -105,7 +105,7 @@ class User:
         """
         recipient_pk = None
         try:
-            recipient_pk = keyserver.Get(recipient)
+            recipient_pk = keyserver.Get(recipient+"encrypt")
         finally:
             if not recipient_pk:
                 raise util.DropboxError("No such recipient exists!")
@@ -122,7 +122,7 @@ class User:
                  return children + [[recipient, memloc.Make()]]
             else:
                 return children
-        self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], local_node_callback=add_share)
+        self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], filename, local_node_callback=add_share)
 
         self.__save_metadata__(metadata, share_to=recipient)
 
@@ -133,7 +133,7 @@ class User:
         """
         sender_pk = None
         try:
-            sender_pk = keyserver.Get(sender)
+            sender_pk = keyserver.Get(sender+"verify")
         finally:
             if not sender_pk:
                 raise util.DropboxError("No such sender exists!")
@@ -160,7 +160,7 @@ class User:
         """
         old_recipient_pk = None
         try:
-            old_recipient_pk = keyserver.Get(old_recipient)
+            old_recipient_pk = keyserver.Get(old_recipient+"verify")
         finally:
             if not old_recipient_pk:
                 raise util.DropboxError("No such old recipient exists!")
@@ -200,7 +200,7 @@ class User:
             else:
                 self.__save_metadata__(metadata, share_to = usr)
                 return children
-        self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], update_share)
+        self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], filename, update_share)
 
     def __download_file(self, filename: str, owner=None, owner_pk=None, whence="file contents") -> Union[Union[object, bytes, int], Any]:
         err2 = ""
@@ -295,81 +295,71 @@ class User:
         except ValueError:
             return False
 
-    def HybridEncryptAndSign(self, pk, data, sk=None):  # encryption key, data, secret (signing) key
-        sk = sk or self.sk
-        """ hybrid encryption start "'"
-        encrypted_data = crypto.AsymmetricEncrypt(self.pk, util.ObjectToBytes(data))
-        """
+    def HybridEncryptAndSign(self, data, send_to):  # encryption key, data, secret (signing) key
+        encrypt_key = keyserver.Get(send_to + "encrypt")
         ephemeral, iv = crypto.SecureRandom(16), crypto.SecureRandom(16)
-        encrypted_data = crypto.AsymmetricEncrypt(pk, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(data))
-        """ hybrid encryption  end  """
-        data_signature = crypto.SignatureSign(crypto.SignatureSignKey(sk.libPrivKey), encrypted_data)
+        encrypted_data = crypto.AsymmetricEncrypt(encrypt_key, ephemeral) + crypto.SymmetricEncrypt(ephemeral, iv, util.ObjectToBytes(data))
+        data_signature = crypto.SignatureSign(self.private_keys["sign"], encrypted_data)
         return encrypted_data, data_signature
 
-    def HybridDecrypt(self, sk, encrypted_data):#, data_signature, pk=None):  # decryption key, data, public (verification) key   #AndVerify   # pk = pk or self.pk
-        """ hybrid decryption start "'"
-        metadata = util.BytesToObject(
-            crypto.AsymmetricDecrypt(
-                self.sk,
-                encrypted_metadata
-            )
-        )
-        """
+    def HybridDecryptandverify(self, encrypted_data, signature, source):
+        verify_key = keyserver.Get(source+"verify")
+        valid = crypto.SignatureVerify(verify_key, encrypted_data, signature)
+        if not valid:
+            return None, False
         data = util.BytesToObject(
             crypto.SymmetricDecrypt(
                 crypto.AsymmetricDecrypt(
-                    sk,
+                    self.private_keys["decrypt"],
                     encrypted_data[:2048 // 8]
                 ), encrypted_data[2048 // 8:]
             )
         )
-        """ hybrid decryption  end  """
-        return data
+        return data, True
 
-    def __traverse_share_tree__(self, share_tree_ptr, parent, local_node_callback=None):
+    def __traverse_share_tree__(self, share_tree_ptr, parent, filename, local_node_callback=None):
         share_tree = None
         try:
             share_tree = util.BytesToObject(dataserver.Get(share_tree_ptr))
-            pk = keyserver.Get(parent)
-            valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), util.ObjectToBytes(share_tree["children"]), share_tree["signature"])
-            if not valid:
+            verify_key = keyserver.Get(parent+"verify")
+            data_to_verify = util.ObjectToBytes([share_tree["children"], share_tree["filename"]])
+            valid = crypto.SignatureVerify(verify_key, data_to_verify, share_tree["signature"])
+            if not valid or share_tree["filename"] != filename:
                 raise util.DropboxError("Integrity violation in share tree")
         except ValueError:
-            share_tree = {"children":[], "signature":None}
+            share_tree = {"children":[], "filename":filename, "signature":None}
         children = share_tree["children"]
         if local_node_callback is not None:
                 children = local_node_callback(parent, children)
                 if children != share_tree["children"]:
                     share_tree["children"] = children
-                    share_tree["signature"] = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), util.ObjectToBytes(share_tree["children"]))
+                    data_to_sign = util.ObjectToBytes([children, filename])
+                    share_tree["signature"] = crypto.SignatureSign(self.private_keys["sign"], data_to_sign)
                     dataserver.Set(share_tree_ptr, util.ObjectToBytes(share_tree))
         for child in children:
             name = child[0]
             child_ptr = child[1]
             if name != parent: #prevent infinite recursion in case of self share
-                self.__traverse_share_tree__(child_ptr, name, local_node_callback)
+                self.__traverse_share_tree__(child_ptr, name, filename, local_node_callback)
 
     def __read_metadata__(self, filename, share_source=None):
         encrypted_metadata = None
         metadata_signature = None
+        target_user = self.username
         source = crypto.HashKDF(self.root_key, filename)
         if share_source is not None:
+            target_user = share_source
             source = crypto.HashKDF(crypto.Hash(share_source.encode()+self.username.encode()), filename)[:16]
         try:
             encrypted_metadata, metadata_signature = util.BytesToObject(dataserver.Get(source))
         except:
             return None, "No entry in database"
-        pk = self.pk if share_source is None else keyserver.Get(share_source)
-        valid = crypto.SignatureVerify(
-            crypto.SignatureVerifyKey(pk.libPubKey),
-            encrypted_metadata,
-            metadata_signature
-        )
-        if not valid:
-            return None, "signature not valid"
+
         metadata = None
         try:
-            metadata = self.HybridDecrypt(self.sk, encrypted_metadata)
+            metadata, valid = self.HybridDecryptandverify(encrypted_metadata, metadata_signature, target_user)
+            if not valid:
+                return None, "couldn't verify metadata"
             assert (metadata["filename"] == filename)  # protect against a moved-metadata attack
         except:
             return None, "failed to decrypt"
@@ -377,13 +367,13 @@ class User:
 
     def __save_metadata__(self, metadata, share_to=None):
         filename = metadata["filename"]
-        pk = self.pk if share_to is None else keyserver.Get(share_to)
-
+        target_user = self.username
         dest = crypto.HashKDF(self.root_key, filename)
         if share_to is not None:
+            target_user = share_to
             dest = crypto.HashKDF(crypto.Hash(self.username.encode()+share_to.encode()), filename)[:16]
         # Encrypt and sign file metadata
-        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(pk, metadata, self.sk)
+        encrypted_metadata, metadata_signature = self.HybridEncryptAndSign(metadata, target_user)
         # Store the file in a memloc and save location to user's root structure
         file_bytes = util.ObjectToBytes([encrypted_metadata, metadata_signature])
         dataserver.Set(
@@ -411,7 +401,10 @@ class User:
         dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
         
     @classmethod
-    def __write_root__(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
+    def __write_root__(cls, ptr, data, k):  # symmetric key, k for encryption
+        sign_key = data["sign"]
+        data["sign"] = bytes(data["sign"])
+        data["decrypt"] = bytes(data["decrypt"])
         dataserver.Set(ptr,
            crypto.SymmetricEncrypt(
                k,
@@ -421,14 +414,15 @@ class User:
         )  # set data
         dataserver.Set(ptr[-1:]+ptr[:-1],
             crypto.SignatureSign(
-                crypto.SignatureSignKey(sk.libPrivKey),
+                sign_key,
                 dataserver.Get(ptr),
             )
         )  # sign data
 
     @classmethod
-    def __read_root__(cls, ptr, k, pk):
-        dataserver_Get_ptr_ = dataserver.Get(ptr)
+    def __read_root__(cls, ptr, k, verify_key):
+
+        dataserver_Get_ptr_ = dataserver.Get(ptr) #should be wrapped in try/catch
         data_opt = None
         try:
             data_opt = util.BytesToObject(
@@ -441,7 +435,7 @@ class User:
             raise util.DropboxError("Decryption failed!  Invalid password?")
 
         sig = dataserver.Get(ptr[-1:]+ptr[:-1])
-        valid = crypto.SignatureVerify(crypto.SignatureVerifyKey(pk.libPubKey), dataserver_Get_ptr_, sig)
+        valid = crypto.SignatureVerify(verify_key, dataserver_Get_ptr_, sig)
         if not valid or not data_opt:
             raise util.DropboxError("Integrity violation")
         else:
@@ -454,14 +448,13 @@ def create_user(username: str, password: str) -> User:
     http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/authentication/create-user.html
     """
 
-    pk, sk = crypto.AsymmetricKeyGen()
-
+    pk_encrypt, sk_decrypt = crypto.AsymmetricKeyGen()
+    pk_verify, sk_sign = crypto.SignatureKeyGen()
+    if username == "":
+        raise util.DropboxError("username must be nonempty")
     try:
-        keyserver.Set("", None)
-    except ValueError: pass
-
-    try:
-        keyserver.Set(username, pk)
+        keyserver.Set(username + "encrypt", pk_encrypt)
+        keyserver.Set(username + "verify", pk_verify)
     except ValueError:
         raise util.DropboxError("That username is not available!")
 
@@ -469,7 +462,9 @@ def create_user(username: str, password: str) -> User:
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    User.__write_root__(root_ptr, bytes(sk), root_key, sk)
+    private_keys = {"decrypt": sk_decrypt, "sign": sk_sign}
+
+    User.__write_root__(root_ptr, private_keys, root_key)
 
     return authenticate_user(username, password)
 
@@ -480,16 +475,18 @@ def authenticate_user(username: str, password: str) -> User:
     http://cs.brown.edu/courses/csci1660/dropbox-wiki/client-api/authentication/authenticate-user.html
     """
 
-    pk = None
+    verify_key = None
     try:
-        pk = keyserver.Get(username)
+        verify_key = keyserver.Get(username+"verify")
     finally:
-        if not pk: raise util.DropboxError("Invalid username!")
+        if not verify_key: raise util.DropboxError("Invalid username!")
 
     salt = username.encode("ascii") + b"super secret academy salt"
     root_ptr = crypto.PasswordKDF("usrdir", salt, 16)
     root_key = crypto.PasswordKDF(password, salt, 16)
 
-    sk = crypto.AsymmetricDecryptKey.from_bytes(User.__read_root__(root_ptr, root_key, pk))
 
-    return User(username, root_key, pk, sk)
+    private_keys = User.__read_root__(root_ptr, root_key, verify_key)
+    private_keys["decrypt"] = crypto.AsymmetricDecryptKey.from_bytes(private_keys["decrypt"])
+    private_keys["sign"] = crypto.SignatureSignKey.from_bytes(private_keys["sign"])
+    return User(username, root_key, private_keys)
