@@ -251,9 +251,9 @@ class User:
         data = b""  # data = None
         try:
             header, parts = data_parts[0], data_parts[1:]
-            assert (len(header) == 16)
+            assert(len(header) == 16)  # prevent some truncation/overflow attacks
             parts_count = int.from_bytes(header, 'little')
-            assert (len(parts) == parts_count)
+            #assert(len(parts) == parts_count)  -- (Commented out to allow faster reuploads at the expense of garbage collection.)
             # data = b""
             for ctr, part in enumerate(parts, 1):  # enumerate(data_parts)[1:]
                 idx, part_data = int.from_bytes(part[:16], 'little'), part[16:]
