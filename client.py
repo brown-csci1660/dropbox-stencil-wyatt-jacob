@@ -253,7 +253,7 @@ class User:
             header, parts = data_parts[0], data_parts[1:]
             assert(len(header) == 16)  # prevent some truncation/overflow attacks
             parts_count = int.from_bytes(header, 'little')
-            #assert(len(parts) == parts_count)  -- (Commented out to allow faster reuploads at the expense of garbage collection.)
+            assert(len(parts) == parts_count)
             # data = b""
             for ctr, part in enumerate(parts, 1):  # enumerate(data_parts)[1:]
                 idx, part_data = int.from_bytes(part[:16], 'little'), part[16:]
@@ -394,11 +394,16 @@ class User:
         dataserver.Set(ptr[-1:] + ptr[:-1], header_signature)
 
         # Encrypt and sign file data
-        ptr = int.to_bytes(int.from_bytes(ptr, 'little')+ parts_count + 1, 16, 'little')
+        ptr_int = int.from_bytes(ptr, 'little') + parts_count + 1
+        ptr = int.to_bytes(ptr_int, 16, 'little')
         encrypted_data = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr+data)
         data_signature = crypto.HMAC(metadata["key"], encrypted_data)
         dataserver.Set(ptr, encrypted_data)
         dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
+
+        # Delete block after last written block, if exists
+        try: dataserver.Delete(int.to_bytes(ptr_int + 1, 16, 'little'))
+        except: pass
         
     @classmethod
     def __write_root__(cls, ptr, data, k):  # symmetric key, k for encryption
