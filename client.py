@@ -426,10 +426,10 @@ class User:
 
     @classmethod
     def __read_root__(cls, ptr, k, verify_key):
-
-        dataserver_Get_ptr_ = dataserver.Get(ptr) #should be wrapped in try/catch
+        dataserver_Get_ptr_ = None
         data_opt = None
         try:
+            dataserver_Get_ptr_ = dataserver.Get(ptr)
             data_opt = util.BytesToObject(
                 crypto.SymmetricDecrypt(
                     k,
