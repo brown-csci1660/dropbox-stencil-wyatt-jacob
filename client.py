@@ -43,7 +43,6 @@ class User:
         self.root_key = root_key
         self.pk = pk
         self.sk = sk
-        # Are we allowed to add private helper methods?  (such as maybe to refactor duplicate code?)
 
     def upload_file(self, filename: str, data: bytes) -> None:
         """
@@ -74,22 +73,7 @@ class User:
             "share_tree": old_share_tree or memloc.Make()  # preserve old share_tree if it exists
         }
 
-        # Encrypt and sign file header
-        ptr = metadata["ptr"]
-        ctr_max = int.to_bytes(1, 16, 'little')
-        encrypted_header = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr_max)
-        header_signature = crypto.HMAC(metadata["key"], encrypted_header)
-        dataserver.Set(ptr, encrypted_header)
-        dataserver.Set(ptr[-1:] + ptr[:-1], header_signature)
-
-        # Encrypt and sign file data
-        ptr = int.to_bytes(int.from_bytes(ptr, 'little')+1, 16, 'little')
-        ctr = int.to_bytes(1, 16, 'little')
-        encrypted_data = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr+data)
-        data_signature = crypto.HMAC(metadata["key"], encrypted_data)
-        dataserver.Set(ptr, encrypted_data)
-        dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
-
+        self.__save_file_data__(metadata, data)
         self.__save_metadata__(metadata)
 
     def download_file(self, filename: str) -> bytes:
@@ -112,24 +96,7 @@ class User:
             raise util.DropboxError("Could not open file for appending or file does not exist.")
 
         parts_count = int.from_bytes(header_bytes, 'little')
-
-        ctr = int.to_bytes(1+parts_count, 16, 'little')
-
-        # Encrypt and sign file header
-        ptr = metadata["ptr"]
-        ctr_max = ctr
-        encrypted_header = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr_max)
-        header_signature = crypto.HMAC(metadata["key"], encrypted_header)
-        dataserver.Set(ptr, encrypted_header)
-        dataserver.Set(ptr[-1:] + ptr[:-1], header_signature)
-
-        # Encrypt and sign file data
-        ptr = int.to_bytes(int.from_bytes(ptr, 'little')+parts_count+1, 16, 'little')
-        ctr = ctr
-        encrypted_data = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr+data)
-        data_signature = crypto.HMAC(metadata["key"], encrypted_data)
-        dataserver.Set(ptr, encrypted_data)
-        dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
+        self.__save_file_data__(metadata, data, parts_count=parts_count)
 
     def share_file(self, filename: str, recipient: str) -> None:
         """
@@ -206,22 +173,13 @@ class User:
         del old_recipient_pk    
 
         share_tree = None
-        old_ptr = None
         owner = None
         try:
             old_metadata = self.__download_file(filename, whence="metadata only")
             owner = old_metadata["owner"]
             share_tree = old_metadata["share_tree"]
-            old_ptr = old_metadata["ptr"]
         except util.DropboxError:
             raise util.DropboxError("Failed to open and retrieve file's share tree.")
-
-        def rm_share(parent, children):
-            if parent == self.username:
-                return list(filter(lambda x: x[0] != old_recipient, children))
-            else:
-                return children
-        self.__traverse_share_tree__(share_tree, owner, local_node_callback=rm_share)
 
         data = self.download_file(filename)
         # self.upload_file(filename, b"file " + filename.encode() + b" has been deleted")
@@ -237,8 +195,11 @@ class User:
         metadata["share_tree"] = share_tree
         self.__save_metadata__(metadata)
         def update_share(usr, children):
-            self.__save_metadata__(metadata, share_to = usr)
-            return children
+            if usr == self.username:
+                return list(filter(lambda x: x[0] != old_recipient, children))
+            else:
+                self.__save_metadata__(metadata, share_to = usr)
+                return children
         self.__traverse_share_tree__(metadata["share_tree"], metadata["owner"], update_share)
 
     def __download_file(self, filename: str, owner=None, owner_pk=None, whence="file contents") -> Union[Union[object, bytes, int], Any]:
@@ -262,8 +223,8 @@ class User:
             key = metadata["key"]
             while self.isSet(ptr) and (not whence == "metadata and header only" or ptr == metadata["ptr"]):  # when *"header only" is set, the loop body is only run once, as the header will be data_part[0]
                 dataserver_Get_ptr_ = dataserver.Get(ptr)
-                valid = (
-                        crypto.HMAC(key, dataserver_Get_ptr_) ==
+                valid = crypto.HMACEqual(
+                        crypto.HMAC(key, dataserver_Get_ptr_),
                         dataserver.Get(ptr[-1:] + ptr[:-1])  # data_signature
                 )
                 if not valid:
@@ -375,17 +336,18 @@ class User:
                 raise util.DropboxError("Integrity violation in share tree")
         except ValueError:
             share_tree = {"children":[], "signature":None}
-
-        for child in share_tree["children"]:
-            name = child[0]
-            child_ptr = child[1]
-            self.__traverse_share_tree__(child_ptr, name, local_node_callback)
+        children = share_tree["children"]
         if local_node_callback is not None:
-                new_children = local_node_callback(parent, share_tree["children"])
-                if new_children != share_tree["children"]:
-                    share_tree["children"] = new_children
+                children = local_node_callback(parent, children)
+                if children != share_tree["children"]:
+                    share_tree["children"] = children
                     share_tree["signature"] = crypto.SignatureSign(crypto.SignatureSignKey(self.sk.libPrivKey), util.ObjectToBytes(share_tree["children"]))
                     dataserver.Set(share_tree_ptr, util.ObjectToBytes(share_tree))
+        for child in children:
+            name = child[0]
+            child_ptr = child[1]
+            if name != parent: #prevent infinite recursion in case of self share
+                self.__traverse_share_tree__(child_ptr, name, local_node_callback)
 
     def __read_metadata__(self, filename, share_source=None):
         encrypted_metadata = None
@@ -429,6 +391,24 @@ class User:
             file_bytes
         )
 
+    def __save_file_data__(self, metadata, data, parts_count=0):
+
+        ctr = int.to_bytes(1+parts_count, 16, 'little')
+
+        # Encrypt and sign file header
+        ptr = metadata["ptr"]
+        ctr_max = ctr
+        encrypted_header = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr_max)
+        header_signature = crypto.HMAC(metadata["key"], encrypted_header)
+        dataserver.Set(ptr, encrypted_header)
+        dataserver.Set(ptr[-1:] + ptr[:-1], header_signature)
+
+        # Encrypt and sign file data
+        ptr = int.to_bytes(int.from_bytes(ptr, 'little')+ parts_count + 1, 16, 'little')
+        encrypted_data = crypto.SymmetricEncrypt(metadata["key"], crypto.SecureRandom(16), ctr+data)
+        data_signature = crypto.HMAC(metadata["key"], encrypted_data)
+        dataserver.Set(ptr, encrypted_data)
+        dataserver.Set(ptr[-1:] + ptr[:-1], data_signature)
         
     @classmethod
     def __write_root__(cls, ptr, data, k, sk):  # symmetric key, k, and asymmetric secret (signing) key, sk
