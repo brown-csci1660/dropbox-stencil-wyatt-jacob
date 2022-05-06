@@ -372,6 +372,7 @@ class ClientTests(unittest.TestCase):
         
         thunk = lambda: usr3.revoke_file("shared_file", "usr2")
         self.assertRaises(util.DropboxError, thunk)
+
     def test_shared_file_overwite(self):
         usr1 = create_user("usr1", "psw1")
         usr2 = create_user("usr2", "psw2")
@@ -383,6 +384,7 @@ class ClientTests(unittest.TestCase):
 
         usr2.upload_file("shared_file", b"different file data")
         self.assertEqual(usr1.download_file("shared_file"), b"different file data")
+
 
     def test_share_revoke_reshare1(self):
         usr1 = create_user("usr1", "pswd1")
@@ -404,6 +406,7 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(usr2.download_file("shared_file"), b"some data")
 
+
     def test_share_revoke_reshare2(self):
         # Same as before, but receive is called after the file is shared a second time
         usr1 = create_user("usr1", "pswd1")
@@ -423,6 +426,7 @@ class ClientTests(unittest.TestCase):
         usr2.receive_file("shared_file", "usr3")
 
         self.assertEqual(usr2.download_file("shared_file"), b"some data")
+
 
     def test_share_revoke_reshare3(self):
         # Same as before, but receive is called after the file is shared a second time
