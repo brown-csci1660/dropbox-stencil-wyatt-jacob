@@ -505,11 +505,14 @@ class ClientTests(unittest.TestCase):
     def test_share_reupload(self):
         usr1 = create_user("usr1", "pwd1")
 
-        usr1.upload_file("shared_file", b'uploaded data')
-        usr1.append_file("shared_file", b' appended data')
+        usr1.upload_file("shared_file", b"uploaded data")
+        usr1.append_file("shared_file", b" and appended data")
+        downloaded_data = usr1.download_file("shared_file")
+        self.assertEqual(downloaded_data, b'uploaded data and appended data')
 
         usr1.upload_file("shared_file", b"file data")
-        usr1.download_file("shared_file")
+        downloaded_data = usr1.download_file("shared_file")
+        self.assertEqual(downloaded_data, b"file data")
 
 
 # DO NOT EDIT BELOW THIS LINE ##################################################
