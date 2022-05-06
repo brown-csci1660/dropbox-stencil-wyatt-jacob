@@ -502,6 +502,17 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(usr4.download_file("shared_file"), b"file data")
         self.assertRaises(util.DropboxError, lambda: usr5.download_file("shared_file"))
 
+    def test_share_reupload(self):
+        usr1 = create_user("usr1", "pwd1")
+        _usr2 = create_user("usr2", "pwd2")
+
+        usr1.upload_file("shared_file", b'uploaded data')
+        usr1.share_file("shared_file", "usr2")
+        usr1.append_file("shared_file", b' appended data')
+
+        usr1.upload_file("shared_file", b"file data")
+        usr1.download_file("shared_file")
+
 
 # DO NOT EDIT BELOW THIS LINE ##################################################
 
